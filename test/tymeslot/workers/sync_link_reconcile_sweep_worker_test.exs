@@ -14,6 +14,11 @@ defmodule Tymeslot.Workers.SyncLinkReconcileSweepWorkerTest do
   @moduletag :workers
   @moduletag :sync_links
 
+  # Mirrors `SyncLinkReconcileSweepWorker`'s own batch size, which is private
+  # to that module. Stated here so the assertion below names the boundary it is
+  # checking rather than a bare literal.
+  @batch_size 50
+
   import Mox
   import Tymeslot.Factory
   import Tymeslot.SyncLinkTestHelpers
@@ -71,8 +76,8 @@ defmodule Tymeslot.Workers.SyncLinkReconcileSweepWorkerTest do
     end
 
     test "fans out across many links, staggering batches rather than sleeping" do
-      # Two batches' worth plus one, so the stagger is observable: the first 50
-      # go out immediately and the rest are scheduled a second later. Sleeping
+      # Two batches' worth plus one, so the stagger is observable at all: the
+      # 51st link is the only job that lands in the second batch. Sleeping
       # between batches would hold the sweep's queue slot for the duration.
       user = insert(:user)
       source = insert(:calendar_integration, user: user, provider: "google")
@@ -94,7 +99,27 @@ defmodule Tymeslot.Workers.SyncLinkReconcileSweepWorkerTest do
       assert length(jobs) == 51
       assert swept_link_ids() == MapSet.new(links, & &1.id)
 
-      assert Enum.any?(jobs, &(DateTime.compare(&1.scheduled_at, DateTime.utc_now()) == :gt))
+      # Asserted by counting how the batches were scheduled rather than by
+      # comparing against `utc_now()`. The second batch is scheduled one second
+      # after the sweep, so a wall-clock assertion has under a second of margin
+      # and fails whenever the machine stalls between the sweep and this line —
+      # a GC pause or a loaded CI box is enough. The measured margin on an idle
+      # machine was ~900ms, so that race was real rather than theoretical.
+      #
+      # Note the first batch carries no `scheduled_at` of its own, so Oban
+      # defaults it to insertion time and its 50 rows spread over however long
+      # the inserts took. Only the *second* batch is deliberately placed in the
+      # future, and that placement is what this asserts.
+      by_link = Map.new(jobs, &{&1.args["sync_link_id"], &1.scheduled_at})
+      {first_batch_ids, second_batch_ids} = Enum.split(Enum.map(links, & &1.id), @batch_size)
+
+      first_batch_latest =
+        first_batch_ids |> Enum.map(&Map.fetch!(by_link, &1)) |> Enum.max(DateTime)
+
+      assert [second_id] = second_batch_ids
+      second_scheduled = Map.fetch!(by_link, second_id)
+
+      assert DateTime.compare(second_scheduled, first_batch_latest) == :gt
     end
 
     test "reaches no provider" do
