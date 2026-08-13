@@ -346,3 +346,8 @@ msgstr "Couleur pour %{calendar}"
 #, elixir-autogen, elixir-format
 msgid "Default colour"
 msgstr "Couleur par défaut"
+
+#: lib/tymeslot_web/live/dashboard/calendar_grid/grid_views.ex
+#, elixir-autogen, elixir-format
+msgid "overlaps an event on another calendar"
+msgstr "chevauche un évènement d’un autre calendrier"

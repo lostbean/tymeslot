@@ -83,6 +83,10 @@
 @source inline("bg-calendar-{1,2,3,4,5,6,7,8} bg-calendar-fallback");
 @source inline("bg-calendar-{tomato,tangerine,banana,sage,peacock,blueberry,grape,graphite}");
 @source inline("w-6 h-6 w-8 h-8 w-10 h-10 h-16 h-20 box-border");
+/* Cross-calendar clash marker on a grid event: built by interpolation in
+   `calendar_grid/grid_views.ex`, and an outline rather than a ring so it does
+   not fight the focus ring that element already carries. */
+@source inline("outline outline-2 outline-dashed outline-white/90 -outline-offset-2");
 
 @theme {
   /* --- Brand + extended palette (formerly theme.extend.colors) --- */
