@@ -64,6 +64,8 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
   alias Tymeslot.Integrations.Calendar.SyncLink.ConflictHistory
   alias Tymeslot.Security.RateLimiter
   alias TymeslotWeb.Components.CoreComponents.Forms
+  alias TymeslotWeb.Components.Dashboard.Integrations.Calendar.SyncLinkMatrix
+  alias TymeslotWeb.Dashboard.SyncLinks.ConflictLabels
 
   @impl Phoenix.LiveComponent
   def mount(socket) do
@@ -72,7 +74,8 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
      |> assign(:links, [])
      |> assign(:conflicts, %{})
      |> assign(:form_values, %{})
-     |> assign(:form_error, nil)}
+     |> assign(:form_error, nil)
+     |> assign(:matrix_error, nil)}
   end
 
   @impl Phoenix.LiveComponent
@@ -85,7 +88,8 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
      |> assign(:links, SyncLink.list_links(user_id))
      |> assign(:conflicts, ConflictHistory.recent_for_user(user_id))
      |> assign_new(:form_values, fn -> %{} end)
-     |> assign_new(:form_error, fn -> nil end)}
+     |> assign_new(:form_error, fn -> nil end)
+     |> assign_new(:matrix_error, fn -> nil end)}
   end
 
   @impl Phoenix.LiveComponent
@@ -100,6 +104,28 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
       :ok -> create_link(socket, user_id, params)
       {:error, :rate_limited, message} -> {:noreply, assign(socket, :form_error, message)}
       {:error, :invalid_user_id} -> {:noreply, assign(socket, :form_error, generic_error())}
+    end
+  end
+
+  # The grid saves whole. One rate-limit charge covers the submit rather than
+  # one per cell: a five-calendar grid is twenty cells against a bucket of
+  # sixty, so metering per cell would let three deliberate saves exhaust a
+  # budget the limiter's own docs describe as covering "rebuilding an entire
+  # set of links in one sitting" — and being refused halfway would leave the
+  # grid disagreeing with what is stored.
+  def handle_event("save_sync_link_matrix", params, socket) do
+    user_id = socket.assigns.current_user.id
+
+    cells =
+      SyncLinkMatrix.parse_submission(
+        Map.get(params, "matrix", %{}),
+        socket.assigns.integrations
+      )
+
+    case RateLimiter.check_sync_link_write_rate_limit(user_id) do
+      :ok -> apply_matrix(socket, user_id, cells)
+      {:error, :rate_limited, message} -> {:noreply, assign(socket, :matrix_error, message)}
+      {:error, :invalid_user_id} -> {:noreply, assign(socket, :matrix_error, generic_error())}
     end
   end
 
@@ -165,6 +191,25 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
          socket
          |> assign(:form_values, params)
          |> assign(:form_error, generic_error())}
+    end
+  end
+
+  defp apply_matrix(socket, user_id, cells) do
+    case SyncLink.apply_matrix(user_id, cells) do
+      {:ok, _summary} ->
+        {:noreply,
+         socket
+         |> assign(:matrix_error, nil)
+         |> refresh(user_id)}
+
+      {:error, _reason} ->
+        # The grid is redrawn from what was actually stored rather than from
+        # what was submitted: a partly-applied save is reported honestly, and
+        # a redraw from the submitted state would show links that do not exist.
+        {:noreply,
+         socket
+         |> assign(:matrix_error, generic_error())
+         |> refresh(user_id)}
     end
   end
 
@@ -302,6 +347,11 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
     |> Enum.map(&{DisplayHelpers.extract_calendar_display_name(&1), &1.id})
   end
 
+  # ── The link grid ─────────────────────────────────────────────────
+
+  # Every active calendar is a row. Sources are unrestricted — reading a feed
+  # is the one thing every provider can do — so the rows need no filtering and
+  # the asymmetry lives entirely in the columns.
   defp privacy_tier_options do
     [
       {dgettext("dashboard_integrations", "Busy only"), "busy_only"},
@@ -432,8 +482,10 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
                   :for={conflict <- conflicts_for(@conflicts, link)}
                   class="text-token-xs text-tymeslot-600"
                 >
-                  <p class="font-semibold text-tymeslot-800">{conflict_kind_label(conflict.kind)}</p>
-                  <p>{conflict_resolution_label(conflict.resolution)}</p>
+                  <p class="font-semibold text-tymeslot-800">
+                    {ConflictLabels.conflict_kind_label(conflict.kind)}
+                  </p>
+                  <p>{ConflictLabels.conflict_resolution_label(conflict.resolution)}</p>
                   <p class="break-all font-mono text-tymeslot-400">{conflict.source_uid}</p>
                 </li>
               </ul>
@@ -441,6 +493,13 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
           </li>
         </ul>
       </section>
+
+      <SyncLinkMatrix.sync_link_matrix
+        integrations={@integrations}
+        links={@links}
+        error={@matrix_error}
+        target={@myself}
+      />
 
       <section :if={length(@source_options) >= 2} class="space-y-4">
         <h2 class="text-token-lg font-bold text-tymeslot-900">
@@ -533,80 +592,6 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
   end
 
   defp conflicts_for(conflicts, link), do: Map.get(conflicts, link.id, [])
-
-  # What happened, in the organiser's terms rather than the schema's. The stored
-  # value is a code the engine writes; "mirror_edited" on a page means nothing to
-  # someone who has never read the engine.
-  defp conflict_kind_label("mirror_edited"),
-    do:
-      dgettext(
-        "dashboard_integrations",
-        "The busy block was edited on the target calendar."
-      )
-
-  defp conflict_kind_label("both_changed"),
-    do:
-      dgettext(
-        "dashboard_integrations",
-        "The original event and its busy block both changed."
-      )
-
-  defp conflict_kind_label("delete_race"),
-    do:
-      dgettext(
-        "dashboard_integrations",
-        "The original event was deleted while the placeholder was edited."
-      )
-
-  defp conflict_kind_label("write_failed"),
-    do:
-      dgettext(
-        "dashboard_integrations",
-        "The busy block could not be written to the target calendar."
-      )
-
-  # Both halves of the failure, because naming only one of them misleads. The
-  # instinct is to call this over-blocking, and the freed slot is the visible
-  # symptom — but the slot the occurrence moved *to* is unblocked and can be
-  # booked over a meeting that is genuinely happening, which is the more
-  # damaging half and the one nobody looks for unless told.
-  defp conflict_kind_label("occurrence_moved"),
-    do:
-      dgettext(
-        "dashboard_integrations",
-        "One occurrence of this repeating event was moved. The busy block still sits at its original time, and no busy block covers its new time — so that slot can be double-booked."
-      )
-
-  # No longer produced — placeholders now carry the series' cancelled
-  # occurrences — but historical rows are still rendered, because the table is
-  # append-only and this was true of the placeholder at the time it was written.
-  # The wording is past tense for that reason: an organiser reading a row from
-  # last month must not go looking for a gap that today's placeholder does not
-  # have.
-  defp conflict_kind_label("series_exceptions"),
-    do:
-      dgettext(
-        "dashboard_integrations",
-        "The repeating busy block did not reflect cancelled occurrences at the time."
-      )
-
-  # A kind this version does not know how to name is still shown, because the
-  # row's date and event are useful on their own and a silently dropped entry
-  # would make the history lie about how many there were.
-  defp conflict_kind_label(_kind),
-    do: dgettext("dashboard_integrations", "The two calendars differed.")
-
-  defp conflict_resolution_label("source_won"),
-    do: dgettext("dashboard_integrations", "The original event was kept.")
-
-  defp conflict_resolution_label("deletion_won"),
-    do: dgettext("dashboard_integrations", "The busy block was removed.")
-
-  defp conflict_resolution_label("skipped"),
-    do: dgettext("dashboard_integrations", "Nothing was changed on the target calendar.")
-
-  defp conflict_resolution_label(_resolution),
-    do: dgettext("dashboard_integrations", "The difference was resolved automatically.")
 
   # What the placeholder will actually say, not what tier was picked. The
   # generic-label row quotes the organiser's own words back at them, because

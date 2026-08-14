@@ -1395,7 +1395,7 @@ msgstr "Tento kalendář se nepodařilo propojit."
 msgid "This provider always writes to its primary calendar."
 msgstr "Tento poskytovatel vždy zapisuje do svého hlavního kalendáře."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "Nothing was changed on the target calendar."
 msgstr "V cílovém kalendáři se nic nezměnilo."
@@ -1410,52 +1410,52 @@ msgstr "Nedávno vyřešené rozdíly"
 msgid "Refresh"
 msgstr "Obnovit"
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The busy block could not be written to the target calendar."
 msgstr "Blok zaneprázdnění se nepodařilo zapsat do cílového kalendáře."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The busy block was edited on the target calendar."
 msgstr "Blok zaneprázdnění byl upraven v cílovém kalendáři."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The busy block was removed."
 msgstr "Blok zaneprázdnění byl odstraněn."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The difference was resolved automatically."
 msgstr "Rozdíl byl vyřešen automaticky."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The original event and its busy block both changed."
 msgstr "Změnila se původní událost i její blok zaneprázdnění."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The original event was deleted while the placeholder was edited."
 msgstr "Původní událost byla smazána, zatímco se zástupný blok upravoval."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The original event was kept."
 msgstr "Byla zachována původní událost."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The two calendars differed."
 msgstr "Oba kalendáře se lišily."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The repeating busy block did not reflect cancelled occurrences at the time."
 msgstr "Opakující se blok zaneprázdnění tehdy nezohledňoval zrušené výskyty."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "One occurrence of this repeating event was moved. The busy block still sits at its original time, and no busy block covers its new time — so that slot can be double-booked."
 msgstr "Jeden výskyt této opakující se události byl přesunut. Blok zaneprázdnění zůstává v původním čase a nový čas nepokrývá žádný blok — tento termín tak lze rezervovat dvakrát."
@@ -1509,3 +1509,33 @@ msgstr "Cílový kalendář"
 #, elixir-autogen, elixir-format
 msgid "This link"
 msgstr "Toto propojení"
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
+#, elixir-autogen, elixir-format
+msgid "A greyed cell belongs to a read-only calendar, which can send but never receive."
+msgstr "Šedé pole patří kalendáři jen pro čtení, který může odesílat, ale nikdy přijímat."
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
+#, elixir-autogen, elixir-format
+msgid "Link grid"
+msgstr "Mřížka propojení"
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
+#, elixir-autogen, elixir-format
+msgid "Mirror from"
+msgstr "Zrcadlit z"
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
+#, elixir-autogen, elixir-format
+msgid "Save grid"
+msgstr "Uložit mřížku"
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
+#, elixir-autogen, elixir-format
+msgid "This calendar is read-only and cannot receive mirrored events."
+msgstr "Tento kalendář je jen pro čtení a nemůže přijímat zrcadlené události."
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
+#, elixir-autogen, elixir-format
+msgid "Tick a cell to mirror events from the calendar in that row onto the calendar in that column."
+msgstr "Zaškrtnutím pole zrcadlíte události kalendáře v daném řádku do kalendáře v daném sloupci."

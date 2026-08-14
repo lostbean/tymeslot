@@ -1387,7 +1387,7 @@ msgstr "Dieser Kalender konnte nicht verknüpft werden."
 msgid "This provider always writes to its primary calendar."
 msgstr "Dieser Anbieter schreibt immer in seinen Hauptkalender."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "Nothing was changed on the target calendar."
 msgstr "Im Zielkalender wurde nichts geändert."
@@ -1402,52 +1402,52 @@ msgstr "Kürzlich aufgelöste Unterschiede"
 msgid "Refresh"
 msgstr "Aktualisieren"
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The busy block could not be written to the target calendar."
 msgstr "Der Belegt-Block konnte nicht in den Zielkalender geschrieben werden."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The busy block was edited on the target calendar."
 msgstr "Der Belegt-Block wurde im Zielkalender bearbeitet."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The busy block was removed."
 msgstr "Der Belegt-Block wurde entfernt."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The difference was resolved automatically."
 msgstr "Der Unterschied wurde automatisch aufgelöst."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The original event and its busy block both changed."
 msgstr "Das ursprüngliche Ereignis und sein Belegt-Block wurden beide geändert."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The original event was deleted while the placeholder was edited."
 msgstr "Das ursprüngliche Ereignis wurde gelöscht, während der Platzhalter bearbeitet wurde."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The original event was kept."
 msgstr "Das ursprüngliche Ereignis wurde beibehalten."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The two calendars differed."
 msgstr "Die beiden Kalender wichen voneinander ab."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "The repeating busy block did not reflect cancelled occurrences at the time."
 msgstr "Der wiederkehrende Belegt-Block berücksichtigte damals abgesagte Termine der Serie nicht."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/live/dashboard/sync_links/conflict_labels.ex
 #, elixir-autogen, elixir-format
 msgid "One occurrence of this repeating event was moved. The busy block still sits at its original time, and no busy block covers its new time — so that slot can be double-booked."
 msgstr "Ein Termin dieser Serie wurde verschoben. Der Belegt-Block liegt weiterhin auf der ursprünglichen Zeit, und die neue Zeit ist durch keinen Belegt-Block abgedeckt — dieser Zeitraum kann also doppelt gebucht werden."
@@ -1501,3 +1501,33 @@ msgstr "Der Zielkalender"
 #, elixir-autogen, elixir-format
 msgid "This link"
 msgstr "Diese Verknüpfung"
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
+#, elixir-autogen, elixir-format
+msgid "A greyed cell belongs to a read-only calendar, which can send but never receive."
+msgstr "Ein ausgegrautes Feld gehört zu einem schreibgeschützten Kalender, der senden, aber nie empfangen kann."
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
+#, elixir-autogen, elixir-format
+msgid "Link grid"
+msgstr "Verknüpfungsraster"
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
+#, elixir-autogen, elixir-format
+msgid "Mirror from"
+msgstr "Spiegeln von"
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
+#, elixir-autogen, elixir-format
+msgid "Save grid"
+msgstr "Raster speichern"
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
+#, elixir-autogen, elixir-format
+msgid "This calendar is read-only and cannot receive mirrored events."
+msgstr "Dieser Kalender ist schreibgeschützt und kann keine gespiegelten Termine empfangen."
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
+#, elixir-autogen, elixir-format
+msgid "Tick a cell to mirror events from the calendar in that row onto the calendar in that column."
+msgstr "Markieren Sie ein Feld, um Termine des Kalenders in dieser Zeile auf den Kalender in dieser Spalte zu spiegeln."
