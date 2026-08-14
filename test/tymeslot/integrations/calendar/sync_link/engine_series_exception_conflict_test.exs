@@ -16,10 +16,12 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineSeriesExceptionConflictT
   are different outcomes and only the first is wanted.
 
   A moved occurrence is the divergence that survives all of this, and nothing
-  here asserts on it: it cannot be detected locally at all. Google is fetched
-  with `singleEvents=true`, the expanded instances share one iCalUID, and
-  `upsert_batch/1` collapses them to one cache row — the moved occurrence's new
-  time was never stored. See `SyncLink.ConflictLog`'s moduledoc.
+  here asserts on it because it is not detectable from where this module looks.
+  The engine reads mirror state — a mapping row, a cached placeholder, two
+  etags — and a move is in none of it: `upsert_batch/1` collapses the expanded
+  instances to one cache row and the moved occurrence's new time is never
+  stored. It is detected instead from the uncollapsed batch, before that dedup,
+  and covered by `MovedOccurrenceTest`.
   """
   use Tymeslot.DataCase, async: false
 

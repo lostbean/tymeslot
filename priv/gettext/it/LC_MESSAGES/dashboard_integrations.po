@@ -1451,3 +1451,8 @@ msgstr "I due calendari differivano."
 #, elixir-autogen, elixir-format
 msgid "The repeating busy block did not reflect cancelled occurrences at the time."
 msgstr "Il blocco occupato ricorrente non teneva conto delle occorrenze annullate in quel momento."
+
+#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#, elixir-autogen, elixir-format
+msgid "One occurrence of this repeating event was moved. The busy block still sits at its original time, and no busy block covers its new time — so that slot can be double-booked."
+msgstr "Un’occorrenza di questo evento ricorrente è stata spostata. Il blocco occupato resta all’orario originale e nessun blocco occupato copre il nuovo orario — quella fascia può quindi essere prenotata due volte."

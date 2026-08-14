@@ -52,15 +52,21 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.ConflictLog do
   is trying to find out why a calendar looks wrong.
 
   What the kind's wording also covered — a *moved* occurrence — is still a real
-  divergence and is deliberately **not** reported in its place, because it
-  cannot be detected from here. Google is fetched with `singleEvents=true` and
-  every expanded instance shares one `iCalUID`, so `upsert_batch/1` collapses a
-  series to a single cache row; a moved occurrence's new time was never stored.
-  Recording "this series may contain a moved occurrence" on the evidence that
-  the master has *any* exceptions would fire on every cancellation too, which is
-  the false report just removed, wearing a vaguer sentence. Detecting a move
-  needs data this codebase does not hold, and inventing a row that fires without
-  it would be a guess dressed as a finding — the thing `comparison/3` below
+  divergence and is deliberately **not** reported in its place. It has its own
+  kind, `occurrence_moved`, written by `SyncLink.MovedOccurrence` rather than
+  from here, and the split is not bookkeeping. This module reads mirror state:
+  a mapping row, a cached placeholder, two etags. A move is not visible in any
+  of that. Google is fetched with `singleEvents=true` and every expanded
+  instance shares one `iCalUID`, so `upsert_batch/1` collapses a series to a
+  single cache row and the moved occurrence's new time is never stored — the
+  only place it exists is the uncollapsed batch in
+  `Sync.post_commit_reconciliation/2`, before the dedup, which is where that
+  module runs.
+
+  Reporting it from here instead would have meant firing on the evidence
+  actually to hand: that the master has *any* exceptions. That fires on every
+  cancellation too, which is the false report just removed wearing a vaguer
+  sentence — a guess dressed as a finding, the thing `comparison/3` below
   already refuses to do about a winner it cannot name.
 
   So the kind stays valid in `CalendarSyncConflictSchema` and keeps its label in

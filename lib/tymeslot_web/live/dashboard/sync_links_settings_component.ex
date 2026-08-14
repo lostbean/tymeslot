@@ -505,6 +505,18 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
         "The busy block could not be written to the target calendar."
       )
 
+  # Both halves of the failure, because naming only one of them misleads. The
+  # instinct is to call this over-blocking, and the freed slot is the visible
+  # symptom — but the slot the occurrence moved *to* is unblocked and can be
+  # booked over a meeting that is genuinely happening, which is the more
+  # damaging half and the one nobody looks for unless told.
+  defp conflict_kind_label("occurrence_moved"),
+    do:
+      dgettext(
+        "dashboard_integrations",
+        "One occurrence of this repeating event was moved. The busy block still sits at its original time, and no busy block covers its new time — so that slot can be double-booked."
+      )
+
   # No longer produced — placeholders now carry the series' cancelled
   # occurrences — but historical rows are still rendered, because the table is
   # append-only and this was true of the placeholder at the time it was written.
