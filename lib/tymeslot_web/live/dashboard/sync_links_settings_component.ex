@@ -244,8 +244,13 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
 
   # Any active calendar may be a source: reading a feed is the one thing every
   # provider, subscriptions included, can do.
+  # Labelled rather than named: two accounts of one provider store the same
+  # name, so `integration.name` alone offers the organiser two identical
+  # options to choose a direction between.
   defp source_options(integrations) do
-    for integration <- integrations, integration.is_active, do: {integration.name, integration.id}
+    for integration <- integrations,
+        integration.is_active,
+        do: {DisplayHelpers.integration_label(integration), integration.id}
   end
 
   # A subscription is excluded here rather than refused on submit; see the
@@ -254,7 +259,7 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
     for integration <- integrations,
         integration.is_active,
         Capability.supports?(integration.provider, :mirror_target),
-        do: {integration.name, integration.id}
+        do: {DisplayHelpers.integration_label(integration), integration.id}
   end
 
   # No target selected yet is not "this target cannot choose a calendar" — it is
@@ -364,8 +369,8 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
               <div class="min-w-0">
                 <p class="text-token-sm font-semibold text-tymeslot-900">
                   {dgettext("dashboard_integrations", "%{source} to %{target}",
-                    source: link.source_integration.name,
-                    target: link.target_integration.name
+                    source: DisplayHelpers.integration_label(link.source_integration),
+                    target: DisplayHelpers.integration_label(link.target_integration)
                   )}
                 </p>
                 <p class="text-token-xs text-tymeslot-500">
