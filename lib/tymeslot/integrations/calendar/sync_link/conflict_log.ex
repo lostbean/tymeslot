@@ -35,6 +35,41 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.ConflictLog do
   divergences in a history that is mostly noise. A conflict is logged only when
   two values were compared and found to differ.
 
+  ## Why `series_exceptions` is no longer produced
+
+  Nothing here writes that kind any more, and the reason is that the divergence
+  it named has been fixed rather than merely stopped being interesting.
+
+  It was introduced when a recurring source was mirrored from its master's RRULE
+  alone. The master's `EXDATE` lines were read but dropped, so a series with two
+  cancelled occurrences produced a placeholder that went on blocking two slots
+  the organiser had already freed — a real, describable gap, and the row said so.
+  The placeholder now carries those `EXDATE` lines. A cancelled occurrence is
+  excluded on the target, the slot is bookable again, and there is nothing left
+  for a row to report. Continuing to write one would tell the organiser to go
+  looking for a discrepancy that is not there, which is worse than silence: it
+  spends the credibility of the whole log, which is read precisely when someone
+  is trying to find out why a calendar looks wrong.
+
+  What the kind's wording also covered — a *moved* occurrence — is still a real
+  divergence and is deliberately **not** reported in its place, because it
+  cannot be detected from here. Google is fetched with `singleEvents=true` and
+  every expanded instance shares one `iCalUID`, so `upsert_batch/1` collapses a
+  series to a single cache row; a moved occurrence's new time was never stored.
+  Recording "this series may contain a moved occurrence" on the evidence that
+  the master has *any* exceptions would fire on every cancellation too, which is
+  the false report just removed, wearing a vaguer sentence. Detecting a move
+  needs data this codebase does not hold, and inventing a row that fires without
+  it would be a guess dressed as a finding — the thing `comparison/3` below
+  already refuses to do about a winner it cannot name.
+
+  So the kind stays valid in `CalendarSyncConflictSchema` and keeps its label in
+  the dashboard, because the table is append-only and rows written before the
+  EXDATEs were applied are still true about the placeholders of their time.
+  Removing it from `@kinds` would not delete them; it would only make them
+  render under the catch-all, which describes them worse than the name they were
+  written with.
+
   ## Why a failed append is swallowed
 
   Every call site here sits beside a provider write that has already happened or
@@ -102,84 +137,6 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.ConflictLog do
       :recorded
     else
       :nothing_to_record
-    end
-  end
-
-  @doc """
-  Records a mirrored series whose master carries exceptions the placeholder does
-  not reflect.
-
-  Unlike every other kind here, this is not a race and nothing was overwritten:
-  the write succeeded and is correct as far as it goes. What it records is a
-  *known incompleteness* — a series with two cancelled occurrences is mirrored
-  from its rule alone, so the placeholder blocks two slots the source has
-  already freed.
-
-  It is recorded rather than resolved because the alternatives are worse. Not
-  mirroring the series at all leaves every occurrence bookable, which is the
-  double-booking this feature exists to prevent; applying the EXDATEs means
-  either patching the placeholder's exception set or writing per-instance
-  overrides, and both are the next stage's work. An organiser reading "this
-  series has exceptions the busy block does not reflect" can look, which is the
-  whole difference between a known gap and a quietly wrong block.
-
-  `skipped` is the resolution because nothing won: the exceptions were not
-  applied, and the source did not overwrite anything to leave them out.
-
-  ## Why the same exception set is only recorded once
-
-  This is the one kind whose condition *persists*. The other four describe a
-  moment — an edit that raced a write, a delete that raced an edit — and the
-  write that follows resolves it, which is why each consumes the baseline it was
-  read from. A series' exceptions are not a moment: they sit on the master and
-  are still there on the next sync, and the one after that. Appending on every
-  pass would put a row in the organiser's history every time their calendar
-  synced, for a divergence they were already told about — the "history that is
-  mostly noise" this module's moduledoc exists to avoid, arrived at from the
-  other direction.
-
-  So the last recorded set for this `{link, source}` is compared, and an
-  identical one appends nothing. A *changed* set is new information — an
-  occurrence cancelled since the last pass — and is recorded. The comparison is
-  against the stored detail rather than a flag on the mirror row, because the
-  mirror row is overwritten on every write and a flag on it would be erased by
-  the very sync that needed to read it.
-  """
-  @spec record_series_exceptions(integer(), String.t(), [String.t()]) :: :ok
-  def record_series_exceptions(sync_link_id, source_uid, exceptions)
-      when is_integer(sync_link_id) and is_binary(source_uid) and is_list(exceptions) do
-    if already_recorded?(sync_link_id, source_uid, exceptions) do
-      :ok
-    else
-      append_attrs(
-        %{
-          sync_link_id: sync_link_id,
-          source_uid: source_uid,
-          kind: "series_exceptions",
-          resolution: "skipped",
-          detail: %{
-            "exception_count" => length(exceptions),
-            "exceptions" => exceptions
-          }
-        },
-        sync_link_id,
-        source_uid
-      )
-    end
-  end
-
-  # Scoped to this source's own history, so one series' exceptions never
-  # suppress another's. Absence of a previous row means this set has not been
-  # reported, which is the direction that errs towards telling the organiser
-  # something twice rather than never.
-  defp already_recorded?(sync_link_id, source_uid, exceptions) do
-    case CalendarSyncConflictQueries.last_of_kind(
-           sync_link_id,
-           source_uid,
-           "series_exceptions"
-         ) do
-      {:ok, %{detail: %{"exceptions" => previous}}} -> previous == exceptions
-      _no_previous_record -> false
     end
   end
 

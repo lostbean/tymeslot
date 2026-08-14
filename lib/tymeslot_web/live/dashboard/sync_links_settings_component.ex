@@ -505,15 +505,17 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
         "The busy block could not be written to the target calendar."
       )
 
-  # Not a failure, which the wording has to convey: the busy block is there and
-  # is correct for the series as a whole. What it does not know about is the
-  # occasional cancelled or moved occurrence, so it blocks a slot the organiser
-  # has already freed.
+  # No longer produced — placeholders now carry the series' cancelled
+  # occurrences — but historical rows are still rendered, because the table is
+  # append-only and this was true of the placeholder at the time it was written.
+  # The wording is past tense for that reason: an organiser reading a row from
+  # last month must not go looking for a gap that today's placeholder does not
+  # have.
   defp conflict_kind_label("series_exceptions"),
     do:
       dgettext(
         "dashboard_integrations",
-        "The repeating busy block does not reflect cancelled or moved occurrences."
+        "The repeating busy block did not reflect cancelled occurrences at the time."
       )
 
   # A kind this version does not know how to name is still shown, because the

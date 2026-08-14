@@ -1,21 +1,24 @@
 defmodule Tymeslot.Integrations.Calendar.CalendarSyncConflictSchema do
   @moduledoc """
   One recorded resolution of a mirror divergence: both sides changed, the
-  mirror was edited on the host, a delete raced an update, the write failed
-  outright, or a mirrored series carries exceptions the placeholder does not
-  reflect.
+  mirror was edited on the host, a delete raced an update, or the write failed
+  outright.
 
-  `series_exceptions` is the odd one, and deliberately kept here rather than
-  given a log of its own. Nothing raced and nothing was overwritten — the write
-  succeeded — so it is not a conflict in the sense the other four are. What it
-  shares with them is the property that decides where it belongs: a resolution
-  the engine chose, which destroyed or omitted something the organiser might
-  reasonably have expected, and which the very next successful sync erases every
-  other trace of. A recurring source with two cancelled occurrences is mirrored
-  from its rule alone, so the placeholder blocks two slots that are actually
-  free, and the mirror row records none of that. A second table for one kind
-  would mean two histories to read before answering "why does my calendar look
-  like this".
+  `series_exceptions` is a fifth kind that is **still valid but no longer
+  written**. It recorded a mirrored series whose master carried `EXDATE` lines
+  the placeholder did not reflect, from the stage when a recurring source was
+  mirrored from its RRULE alone: the placeholder went on blocking occurrences
+  the organiser had cancelled, and the row was how they found out. The
+  placeholder now carries those `EXDATE` lines, so the gap it described is
+  closed and `SyncLink.ConflictLog` produces no more of them — see its moduledoc
+  for why the one divergence that remains, a *moved* occurrence, is not reported
+  in its place rather than being reported on weaker evidence.
+
+  It stays in `@kinds` because this table is append-only and rows written before
+  that fix are still true about the placeholders of their time. Dropping the
+  kind would not remove them; it would leave them rendering under the
+  dashboard's catch-all, which describes them worse than the name they were
+  written with.
 
   Append-only, and separate from the mirror row on purpose. A mirror holds
   current state and is overwritten on every successful write, so a conflict

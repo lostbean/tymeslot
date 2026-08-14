@@ -192,6 +192,12 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
   # starts. A transient failure is therefore *deliberately* discarded too: the
   # sweep is the retry, and the alternative to waiting for it is writing a block
   # at the wrong date.
+  #
+  # The master's EXDATE lines travel with its rule and are written onto the
+  # placeholder, so a cancelled occurrence stops blocking time rather than being
+  # recorded as a gap. A *moved* occurrence still diverges and still cannot be
+  # seen from here — the cache holds one row per series, so the new time is not
+  # in it — which is why nothing is logged in its name; see `ConflictLog`.
   defp resolve_series(link, source_event) do
     case RecurringSeries.resolve(source_event, link.source_integration) do
       :not_recurring ->
@@ -210,23 +216,6 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
         {:discard, :series_master_unavailable}
     end
   end
-
-  # The exceptions the placeholder does not reflect, recorded so the organiser
-  # sees a known gap rather than a quietly wrong block. Called only after the
-  # write has landed, for the same reason `record_overwrite/2` is: a conflict is
-  # a resolution, and a write that failed resolved nothing — recording before
-  # the call would append a row per retry for a divergence still outstanding,
-  # and the retry that finally succeeded would append one more.
-  defp note_series_exceptions(:ok, link, source_uid, series_opts) do
-    case Keyword.get(series_opts, :exceptions, []) do
-      [] -> :ok
-      exceptions -> ConflictLog.record_series_exceptions(link.id, source_uid, exceptions)
-    end
-
-    :ok
-  end
-
-  defp note_series_exceptions(result, _link, _source_uid, _series_opts), do: result
 
   @doc """
   Withdraws the placeholder for a source event that is gone, or that has stopped
@@ -277,9 +266,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
       {:ok, created} ->
         result = persist_or_compensate(link, source_event, target_uid, created, user_id)
 
-        result
-        |> paint(link, target_uid, provider_event_id(created), user_id)
-        |> note_series_exceptions(link, source_event.uid, series_opts)
+        paint(result, link, target_uid, provider_event_id(created), user_id)
 
       {:error, reason} ->
         record_write_failure(link, source_event.uid, :create, reason, final?)
@@ -367,9 +354,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
           source_etag: Map.get(source_event, :etag)
         })
 
-        :ok
-        |> paint(link, target_uid, mirror.target_provider_event_id, user_id)
-        |> note_series_exceptions(link, source_event.uid, series_opts)
+        paint(:ok, link, target_uid, mirror.target_provider_event_id, user_id)
 
       {:error, reason} ->
         # The placeholder on the target is now out of step with its source, and
@@ -576,7 +561,8 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
   defp payload_for(link, source_event, target_uid, series_opts) do
     payload =
       MirrorPayload.build(source_event, target_uid, link,
-        recurrence_rule: Keyword.get(series_opts, :recurrence_rule)
+        recurrence_rule: Keyword.get(series_opts, :recurrence_rule),
+        recurrence_exception_lines: Keyword.get(series_opts, :exceptions)
       )
 
     case link.target_calendar_id do

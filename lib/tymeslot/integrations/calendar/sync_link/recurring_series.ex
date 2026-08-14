@@ -64,8 +64,14 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.RecurringSeries do
   The master's `recurrence` is a **list**: an RRULE, and then any number of
   EXDATE, RDATE or EXRULE lines. `EventNormaliser.map_recurrence_rule/1` keeps
   only the first entry, so a normalised master would arrive with its exceptions
-  already discarded — and the exceptions are precisely what the caller has to
-  log as a known divergence. Reading the list here is what keeps them visible.
+  already discarded — and the exceptions are precisely what the placeholder
+  needs in order to stop blocking a cancelled occurrence. Reading the list here
+  is what keeps them.
+
+  The normalised `recurrence_exceptions` field is no substitute either, and not
+  only because the master is never normalised on this path: it is a `[Date.t()]`,
+  which cannot express an exception at a given time in a given zone. A weekly
+  09:00 meeting with one Tuesday cancelled needs the instant, not the day.
 
   ## Google only, and why that is not a `Capability` question
 
@@ -91,10 +97,17 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.RecurringSeries do
   mapper expects — `EventMapper.maybe_add_recurrence/2` strips and re-adds the
   prefix itself, so either form works and the master's own is kept.
 
-  `exceptions` holds the master's EXDATE lines verbatim. They are *not* applied
-  to the placeholder in this stage: the mirror is written from the rule alone
-  and the divergence is logged, so the organiser sees a known gap rather than a
-  quietly wrong block.
+  `exceptions` holds the master's EXDATE lines verbatim — whole iCalendar
+  property lines, keeping whichever `TZID` or `VALUE=DATE` parameter the master
+  wrote, because the instant an occurrence was cancelled at is in those
+  parameters. They are written onto the placeholder alongside the rule, which is
+  what stops a cancelled occurrence from going on blocking its slot.
+
+  EXDATE only. `RDATE` adds occurrences the rule does not name and `EXRULE`
+  removes a whole pattern; neither is a cancellation, and forwarding them
+  unexamined would let the placeholder describe a series the source does not
+  have. A *moved* occurrence is not here at all and cannot be — see the
+  moduledoc's note on `singleEvents=true`.
   """
   @type series :: %{recurrence_rule: String.t(), exceptions: [String.t()]}
 

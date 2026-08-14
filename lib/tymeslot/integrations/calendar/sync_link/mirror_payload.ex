@@ -89,6 +89,28 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.MirrorPayload do
   `busy_only` placeholder that blocked one Tuesday instead of all of them would
   be wrong rather than private.
 
+  ## The exception lines, and why they are not `recurrence_exceptions`
+
+  The master's `EXDATE` lines arrive the same way and for the same reason, and
+  they are what stops a *cancelled* occurrence from blocking time: a placeholder
+  built from the rule alone keeps blocking every Tuesday the rule names,
+  including the ones the organiser has already called off.
+
+  They are carried under `:recurrence_exception_lines` rather than the obvious
+  `:recurrence_exceptions` because that name is already taken, by a field of a
+  different type. `CalendarEvent` and `ProviderCalendarEventSchema` both carry
+  `recurrence_exceptions` as a `[Date.t()]`, and `ICalBuilder.Properties`
+  `build_exdate/1` consumes that form — matching on `%Date{}` and `%DateTime{}`
+  to emit a value type matching DTSTART. What travels here is a `[String.t()]`
+  of whole iCalendar property lines, kept verbatim from the master because
+  `RecurringSeries` reads them off the raw provider body. Putting a list of
+  strings under the name that means a list of dates would reach `build_exdate/1`
+  as a `FunctionClauseError` on the first CalDAV target — so the two shapes get
+  two names, and the name says which one it is.
+
+  Like the rule, they do not vary by tier: a cancelled occurrence is a fact
+  about the timing, and `busy_only` mirrors the timing exactly.
+
   ## Why the all-day branch exists
 
   All-day rows carry `start_date`/`end_date` and leave `start_at`/`end_at` NULL
@@ -147,8 +169,16 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.MirrorPayload do
   than read off the source — see the moduledoc for why the source's own is not
   trustworthy. Absent or `nil` builds a one-off placeholder, which is what every
   non-recurring source wants.
+
+  `:recurrence_exception_lines` are the master's `EXDATE` lines verbatim, whole
+  iCalendar property lines rather than dates. Absent or empty builds a
+  placeholder with no exceptions, which is both the non-recurring case and the
+  recurring one whose occurrences are all still on.
   """
-  @type opts :: [recurrence_rule: String.t() | nil]
+  @type opts :: [
+          recurrence_rule: String.t() | nil,
+          recurrence_exception_lines: [String.t()] | nil
+        ]
 
   @doc """
   The `busy_only` payload for one source event, addressed to `target_uid`.
@@ -197,6 +227,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.MirrorPayload do
     |> Map.merge(timing(source))
     |> Map.put(:timezone, Map.get(source, :timezone))
     |> put_present(:recurrence_rule, Keyword.get(opts, :recurrence_rule))
+    |> put_present(:recurrence_exception_lines, Keyword.get(opts, :recurrence_exception_lines))
   end
 
   @doc "The title every `busy_only` placeholder carries."
@@ -259,9 +290,13 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.MirrorPayload do
 
   # Absent rather than present-and-empty: a `nil` description sent to a provider
   # is a write of an empty string over whatever is there, which on the update
-  # path would clear a field the organiser edited on the target.
+  # path would clear a field the organiser edited on the target. The empty list
+  # is the same case for the exception lines — a series with nothing cancelled
+  # and a non-recurring event should reach the mapper identically, so that the
+  # shared outbound mapper has one shape to answer rather than two.
   defp put_present(payload, _key, nil), do: payload
   defp put_present(payload, _key, ""), do: payload
+  defp put_present(payload, _key, []), do: payload
   defp put_present(payload, key, value), do: Map.put(payload, key, value)
 
   # `%Date{}` values are the all-day signal every provider mapper reads; see the

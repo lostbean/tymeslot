@@ -13,6 +13,12 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineRecurrenceTest do
   The request-count test is the second: one master fetch per series per change.
   A version that fetched per occurrence would be correct and unaffordable, and
   nothing but counting the calls tells the two apart.
+
+  The EXDATE tests are the third, and are on the payload for the same reason. A
+  cancelled occurrence is freed by the `EXDATE` line reaching the target, not by
+  anything Tymeslot stores: a version that resolved the exceptions correctly and
+  dropped them on the way into the payload would leave the cancelled Tuesday
+  blocked and pass every row-level assertion.
   """
   use Tymeslot.DataCase, async: false
 
@@ -23,7 +29,6 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineRecurrenceTest do
   import Tymeslot.Factory
   import Tymeslot.SyncLinkTestHelpers
 
-  alias Tymeslot.Integrations.Calendar.CalendarSyncConflictQueries
   alias Tymeslot.Integrations.Calendar.CalendarSyncLinkQueries
   alias Tymeslot.Integrations.Calendar.CalendarSyncMirrorQueries
   alias Tymeslot.Integrations.Calendar.ProviderCalendarEventSchema
@@ -340,8 +345,8 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineRecurrenceTest do
     end
   end
 
-  describe "exceptions are logged, not silently dropped" do
-    test "a master reporting EXDATEs still writes the placeholder", %{
+  describe "a cancelled occurrence stops blocking time" do
+    test "the master's EXDATE lines reach the payload alongside the rule", %{
       user: user,
       source: source,
       link: link
@@ -360,14 +365,18 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineRecurrenceTest do
 
       assert :ok == Engine.mirror(link, weekly_instance(source), user.id)
 
-      # Written from the series rule alone: a gap the organiser can be told
-      # about beats no block at all, which would leave the whole series
-      # bookable.
+      # The rule alone would keep blocking the cancelled Tuesday. The EXDATE is
+      # what frees it, so it is what gets asserted on the payload the provider
+      # was handed — the placeholder's own row proves nothing about this.
       assert_received {:payload, payload}
       assert payload.recurrence_rule == "RRULE:FREQ=WEEKLY;BYDAY=TU"
+
+      assert payload.recurrence_exception_lines == [
+               "EXDATE;TZID=Europe/Tallinn:20261013T090000"
+             ]
     end
 
-    test "and records a conflict row naming the divergence", %{
+    test "every EXDATE line the master carries travels, in order", %{
       user: user,
       source: source,
       link: link
@@ -378,124 +387,106 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineRecurrenceTest do
         "EXDATE;TZID=Europe/Tallinn:20261020T090000"
       ])
 
-      expect(Tymeslot.CalendarMock, :create_event, fn _data, _context ->
+      test_pid = self()
+
+      expect(Tymeslot.CalendarMock, :create_event, fn event_data, _context ->
+        send(test_pid, {:payload, event_data})
         {:ok, %{provider_event_id: "target-pid-1"}}
       end)
 
       assert :ok == Engine.mirror(link, weekly_instance(source), user.id)
 
-      assert [conflict] = CalendarSyncConflictQueries.list_for_link(link.id)
-      assert conflict.kind == "series_exceptions"
-      assert conflict.source_uid == "weekly-series@google.com"
-      assert conflict.detail["exception_count"] == 2
+      assert_received {:payload, payload}
 
-      assert conflict.detail["exceptions"] == [
+      assert payload.recurrence_exception_lines == [
                "EXDATE;TZID=Europe/Tallinn:20261013T090000",
                "EXDATE;TZID=Europe/Tallinn:20261020T090000"
              ]
     end
 
-    # The failure the ConflictLog moduledoc warns about: "a row on every pass of
-    # every event, drowning the real divergences in a history that is mostly
-    # noise". A weekly series with one cancelled occurrence syncs as often as
-    # its calendar does, and its exceptions do not change between passes — so
-    # the second pass has nothing new to report.
-    test "an unchanged exception set is not appended again on the next pass", %{
+    test "an occurrence cancelled between passes reaches the update too", %{
       user: user,
       source: source,
       link: link
     } do
-      exdates = [
-        "RRULE:FREQ=WEEKLY;BYDAY=TU",
-        "EXDATE;TZID=Europe/Tallinn:20261013T090000"
-      ]
+      target_uid = Engine.target_uid_for(link.id, "weekly-series@google.com")
 
-      expect_master(exdates)
+      mirror_for_link(link,
+        source_uid: "weekly-series@google.com",
+        target_uid: target_uid,
+        target_provider_event_id: "target-pid-1"
+      )
 
-      expect(Tymeslot.CalendarMock, :create_event, fn _data, _context ->
-        {:ok, %{provider_event_id: "target-pid-1"}}
-      end)
-
-      assert :ok == Engine.mirror(link, weekly_instance(source), user.id)
-      assert [first] = CalendarSyncConflictQueries.list_for_link(link.id)
-
-      # A second sync of the same unchanged series.
-      expect_master(exdates)
-
-      expect(Tymeslot.CalendarMock, :update_event, fn _uid, _data, _context -> :ok end)
-
-      assert :ok == Engine.mirror(link, weekly_instance(source), user.id)
-
-      assert [only] = CalendarSyncConflictQueries.list_for_link(link.id)
-      assert only.id == first.id
-    end
-
-    test "a changed exception set is recorded again, because it is new information", %{
-      user: user,
-      source: source,
-      link: link
-    } do
       expect_master([
         "RRULE:FREQ=WEEKLY;BYDAY=TU",
         "EXDATE;TZID=Europe/Tallinn:20261013T090000"
       ])
 
-      expect(Tymeslot.CalendarMock, :create_event, fn _data, _context ->
-        {:ok, %{provider_event_id: "target-pid-1"}}
+      test_pid = self()
+
+      expect(Tymeslot.CalendarMock, :update_event, fn _uid, event_data, _context ->
+        send(test_pid, {:payload, event_data})
+        :ok
       end)
 
       assert :ok == Engine.mirror(link, weekly_instance(source), user.id)
 
-      # The organiser cancels a second occurrence: a divergence that did not
-      # exist when the first row was written.
-      expect_master([
-        "RRULE:FREQ=WEEKLY;BYDAY=TU",
-        "EXDATE;TZID=Europe/Tallinn:20261013T090000",
-        "EXDATE;TZID=Europe/Tallinn:20261020T090000"
-      ])
+      assert_received {:payload, payload}
 
-      expect(Tymeslot.CalendarMock, :update_event, fn _uid, _data, _context -> :ok end)
-
-      assert :ok == Engine.mirror(link, weekly_instance(source), user.id)
-
-      assert [newest, _first] = CalendarSyncConflictQueries.list_for_link(link.id)
-      assert newest.detail["exception_count"] == 2
+      assert payload.recurrence_exception_lines == [
+               "EXDATE;TZID=Europe/Tallinn:20261013T090000"
+             ]
     end
 
-    test "a series with no exceptions records nothing", %{
+    test "a series with no exceptions carries no exception key at all", %{
       user: user,
       source: source,
       link: link
     } do
       expect_master(["RRULE:FREQ=WEEKLY;BYDAY=TU"])
 
-      expect(Tymeslot.CalendarMock, :create_event, fn _data, _context ->
+      test_pid = self()
+
+      expect(Tymeslot.CalendarMock, :create_event, fn event_data, _context ->
+        send(test_pid, {:payload, event_data})
         {:ok, %{provider_event_id: "target-pid-1"}}
       end)
 
       assert :ok == Engine.mirror(link, weekly_instance(source), user.id)
 
-      assert [] == CalendarSyncConflictQueries.list_for_link(link.id)
+      assert_received {:payload, payload}
+      assert payload.recurrence_rule == "RRULE:FREQ=WEEKLY;BYDAY=TU"
+      refute Map.has_key?(payload, :recurrence_exception_lines)
     end
 
-    test "a write that fails records no exception row: nothing was resolved", %{
+    # RDATE and EXRULE lines a master may also carry are not exceptions and are
+    # not forwarded. `RecurringSeries` filters to EXDATE alone, and this pins
+    # that the payload does not quietly widen to whatever the master held.
+    test "only EXDATE lines travel; other recurrence lines do not", %{
       user: user,
       source: source,
       link: link
     } do
       expect_master([
         "RRULE:FREQ=WEEKLY;BYDAY=TU",
+        "RDATE;TZID=Europe/Tallinn:20261110T090000",
         "EXDATE;TZID=Europe/Tallinn:20261013T090000"
       ])
 
-      expect(Tymeslot.CalendarMock, :create_event, fn _data, _context ->
-        {:error, :rate_limited}
+      test_pid = self()
+
+      expect(Tymeslot.CalendarMock, :create_event, fn event_data, _context ->
+        send(test_pid, {:payload, event_data})
+        {:ok, %{provider_event_id: "target-pid-1"}}
       end)
 
-      assert {:error, :rate_limited} ==
-               Engine.mirror(link, weekly_instance(source), user.id, attempt: 1)
+      assert :ok == Engine.mirror(link, weekly_instance(source), user.id)
 
-      assert [] == CalendarSyncConflictQueries.list_for_link(link.id)
+      assert_received {:payload, payload}
+
+      assert payload.recurrence_exception_lines == [
+               "EXDATE;TZID=Europe/Tallinn:20261013T090000"
+             ]
     end
   end
 

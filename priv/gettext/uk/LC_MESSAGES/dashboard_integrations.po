@@ -1457,5 +1457,5 @@ msgstr "Два календарі розійшлися."
 
 #: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
 #, elixir-autogen, elixir-format
-msgid "The repeating busy block does not reflect cancelled or moved occurrences."
-msgstr "Повторювана позначка зайнятості не враховує скасовані або перенесені події серії."
+msgid "The repeating busy block did not reflect cancelled occurrences at the time."
+msgstr "Повторювана позначка зайнятості тоді не враховувала скасовані події серії."
