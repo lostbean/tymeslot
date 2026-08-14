@@ -209,10 +209,33 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
   # too, whose "can't be blank" has been translated in six locales all along.
   # The whole tuple is passed on, not just the message: `%{count}` and the rest
   # of a validator's interpolation live in the opts.
-  defp first_error(%Ecto.Changeset{errors: [{_field, error} | _rest]}),
-    do: Forms.translate_error(error)
+  # Named, because these are Ecto *field-suffix* messages: "has already been
+  # linked" is a predicate with its subject stripped off, and a banner is the
+  # one place it appears without the field label that completes it. Rendered
+  # bare it reads as a fragment in every locale — the German and French are
+  # worse, since neither puts the verb where English does. Prefixing the field's
+  # own name restores the sentence the message was written to finish.
+  defp first_error(%Ecto.Changeset{errors: [{field, error} | _rest]}),
+    do: "#{field_label(field)} #{Forms.translate_error(error)}"
 
   defp first_error(_changeset), do: generic_error()
+
+  defp field_label(:source_integration_id),
+    do: dgettext("dashboard_integrations", "The source calendar")
+
+  defp field_label(:target_integration_id),
+    do: dgettext("dashboard_integrations", "The target calendar")
+
+  defp field_label(:generic_label), do: dgettext("dashboard_integrations", "The label")
+
+  defp field_label(:mirror_colour), do: dgettext("dashboard_integrations", "The colour")
+
+  defp field_label(:target_calendar_id),
+    do: dgettext("dashboard_integrations", "The chosen calendar")
+
+  # A field this panel does not name is still worth reporting: the message half
+  # is the part that says what went wrong, and a neutral subject beats silence.
+  defp field_label(_field), do: dgettext("dashboard_integrations", "This link")
 
   defp generic_error,
     do: dgettext("dashboard_integrations", "That calendar could not be linked.")

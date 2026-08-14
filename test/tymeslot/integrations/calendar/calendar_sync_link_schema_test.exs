@@ -263,6 +263,45 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkSchemaTest do
     end
   end
 
+  describe "field lengths" do
+    # All three are `varchar(255)`. Without a changeset rule the overflow
+    # reaches Postgres as a 22001 and raises out of the LiveView that submitted
+    # it — the organiser sees "Connection Lost" rather than a form error. And
+    # `generic_label` is free text with a prose placeholder, so a pasted
+    # sentence gets there without anyone trying.
+    test "a generic label longer than the column is refused, not raised", ctx do
+      changeset =
+        CalendarSyncLinkSchema.changeset(
+          %CalendarSyncLinkSchema{},
+          attrs(ctx, %{privacy_tier: "generic_label", generic_label: String.duplicate("a", 256)})
+        )
+
+      refute changeset.valid?
+      assert %{generic_label: [_message]} = errors_on(changeset)
+    end
+
+    test "a target calendar id longer than the column is refused", ctx do
+      changeset =
+        CalendarSyncLinkSchema.changeset(
+          %CalendarSyncLinkSchema{},
+          attrs(ctx, %{target_calendar_id: String.duplicate("c", 256)})
+        )
+
+      refute changeset.valid?
+      assert %{target_calendar_id: [_message]} = errors_on(changeset)
+    end
+
+    test "a label exactly at the limit is accepted", ctx do
+      changeset =
+        CalendarSyncLinkSchema.changeset(
+          %CalendarSyncLinkSchema{},
+          attrs(ctx, %{privacy_tier: "generic_label", generic_label: String.duplicate("a", 255)})
+        )
+
+      assert changeset.valid?
+    end
+  end
+
   describe "database constraints" do
     test "the unique index rejects a duplicate source/target/calendar triple", ctx do
       insert_attrs = attrs(ctx, %{target_calendar_id: "work"})

@@ -96,6 +96,20 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkSchema do
   @spec privacy_tiers() :: [String.t()]
   def privacy_tiers, do: @privacy_tiers
 
+  @doc """
+  Pausing and resuming, and nothing else.
+
+  Deliberately not the full `changeset/2`. Pausing is the control an organiser
+  reaches for when a link is misbehaving, so it has to work on a link that is
+  misbehaving — including a row whose stored attributes no longer satisfy a
+  validation added after it was written. Re-validating a label the write never
+  touches turned "pause this" into an error about a different field, and the
+  one thing an organiser could do about a bad link was the thing that failed.
+  """
+  @spec enabled_changeset(t(), boolean()) :: Ecto.Changeset.t()
+  def enabled_changeset(link, enabled) when is_boolean(enabled),
+    do: cast(link, %{enabled: enabled}, [:enabled])
+
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(link, attrs) do
     link
@@ -117,6 +131,7 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkSchema do
     |> clear_calendar_id_when_target_cannot_choose()
     |> validate_inclusion(:privacy_tier, @privacy_tiers)
     |> validate_generic_label()
+    |> validate_column_lengths()
     |> validate_colour()
     |> foreign_key_constraint(:user_id)
     |> foreign_key_constraint(:source_integration_id)
@@ -217,6 +232,19 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkSchema do
   # which is the same broken promise arrived at by a longer route. Storing the
   # trimmed value keeps the row and the placeholder identical rather than
   # differing by whitespace the organiser cannot see.
+  # Every string column here is a `varchar(255)`, and the database is not a
+  # validation layer: an overflow arrives as a `Postgrex.Error` 22001 raised out
+  # of whatever submitted it, which for the dashboard form means the socket dies
+  # and the organiser sees "Connection Lost" instead of a message naming the
+  # field. `generic_label` is the one that reaches it without malice — free text
+  # with a prose placeholder invites a pasted sentence — but the other two are
+  # the same column type and the same failure.
+  defp validate_column_lengths(changeset) do
+    Enum.reduce([:generic_label, :target_calendar_id, :mirror_colour], changeset, fn field, acc ->
+      validate_length(acc, field, max: 255)
+    end)
+  end
+
   defp validate_generic_label(changeset) do
     if get_field(changeset, :privacy_tier) == "generic_label" do
       changeset

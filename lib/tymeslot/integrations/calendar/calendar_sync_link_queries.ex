@@ -170,6 +170,18 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkQueries do
     |> Repo.insert()
   end
 
+  @doc """
+  Persists a changeset the caller has already built.
+
+  The context builds a focused changeset for a write that must not re-validate
+  the whole row — pausing a link, in particular. Keeping the `Repo` call here
+  means that path still goes through the query module rather than reaching for
+  `Repo` itself.
+  """
+  @spec update_changeset(Ecto.Changeset.t()) ::
+          {:ok, CalendarSyncLinkSchema.t()} | {:error, Ecto.Changeset.t()}
+  def update_changeset(%Ecto.Changeset{} = changeset), do: Repo.update(changeset)
+
   @spec update(CalendarSyncLinkSchema.t(), map()) ::
           {:ok, CalendarSyncLinkSchema.t()} | {:error, Ecto.Changeset.t()}
   def update(%CalendarSyncLinkSchema{} = link, attrs) do

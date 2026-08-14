@@ -371,12 +371,51 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
 
         paint(:ok, link, target_uid, mirror.target_provider_event_id, user_id)
 
+      # The placeholder is gone from the target — almost always because the
+      # organiser deleted the unexplained "Busy" block by hand. The source event
+      # is untouched and still occupies the time, so the answer is to write it
+      # again rather than to record a failure: leaving it would keep the mapping
+      # insisting the slot is covered while the slot is bookable, which is the
+      # double booking this whole feature exists to prevent.
+      #
+      # Recreating rather than erroring is the same recovery
+      # `Meetings.CalendarEventSync` performs for the same reason, and it
+      # converges: `target_uid` is derived from the link and source uid, so the
+      # replacement carries the identity the mapping already names.
+      {:error, :not_found} ->
+        recreate_missing(link, mirror, source_event, target_uid, user_id)
+
       {:error, reason} ->
         # The placeholder on the target is now out of step with its source, and
         # only the row records that. Marking it here is what lets the reconcile
         # sweep find it after Oban has exhausted its attempts.
         mark(mirror, %{state: "failed"})
         record_write_failure(link, mirror.source_uid, :update, reason, final?)
+        {:error, reason}
+    end
+  end
+
+  # The mapping row survives, so this is an update of where the placeholder
+  # lives rather than a fresh mirror: dropping the row and re-creating would
+  # lose the source state the conflict log compares against, and would race the
+  # sweep, which reads a missing mapping as "never mirrored".
+  defp recreate_missing(link, mirror, source_event, target_uid, user_id) do
+    payload = payload_for(link, source_event, target_uid, [])
+
+    case CalendarEvents.create_event(payload, {link.target_integration_id, user_id}) do
+      {:ok, created} ->
+        mark(mirror, %{
+          state: "active",
+          last_synced_at: DateTime.utc_now(),
+          target_provider_event_id: provider_event_id(created),
+          source_updated_at: Map.get(source_event, :provider_updated_at),
+          source_etag: Map.get(source_event, :etag)
+        })
+
+        :ok
+
+      {:error, reason} ->
+        mark(mirror, %{state: "failed"})
         {:error, reason}
     end
   end
