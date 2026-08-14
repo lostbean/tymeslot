@@ -75,10 +75,23 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineRecurrenceTest do
     )
   end
 
+  # The master's own start is March, the series' first occurrence. Every cached
+  # instance the engine ever sees is later than this — that gap is the whole
+  # point of fetching the master, so the fixture carries it.
+  @master_start "2026-03-03T09:00:00Z"
+  @master_end "2026-03-03T09:30:00Z"
+
   defp expect_master(recurrence, times \\ 1) do
     expect(GoogleCalendarAPIMock, :get_event, times, fn _integration, _calendar_id, event_id ->
       assert event_id == "master_abc123"
-      {:ok, %{"id" => "master_abc123", "recurrence" => recurrence}}
+
+      {:ok,
+       %{
+         "id" => "master_abc123",
+         "recurrence" => recurrence,
+         "start" => %{"dateTime" => @master_start},
+         "end" => %{"dateTime" => @master_end}
+       }}
     end)
   end
 
@@ -121,7 +134,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineRecurrenceTest do
       assert [_only_one] = CalendarSyncMirrorQueries.list_for_link(link.id)
     end
 
-    test "the placeholder's times are the source row's own, unchanged by the rule", %{
+    test "the placeholder starts where the series starts, not where the cached row does", %{
       user: user,
       source: source,
       link: link
@@ -140,11 +153,60 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineRecurrenceTest do
 
       assert_received {:payload, payload}
 
-      # Compared to the source's values rather than to a literal or to "now":
-      # the placeholder's start is whatever the row held, and the RRULE is what
-      # makes it a series from there.
-      assert payload.start_time == instance.start_at
-      assert payload.end_time == instance.end_at
+      # A DTSTART taken from the cached row would be December — `singleEvents`
+      # expands the series and `upsert_batch/1` keeps the last instance, so the
+      # row is the *final* occurrence. Pairing that with the master's rule
+      # describes "every Tuesday from December onwards, forever": every real
+      # occurrence before then goes unblocked, and every date after the series
+      # ends is blocked permanently. The rule and the start have to come from
+      # the same place, and that place is the master.
+      assert payload.start_time == ~U[2026-03-03 09:00:00Z]
+      assert payload.end_time == ~U[2026-03-03 09:30:00Z]
+
+      refute payload.start_time == instance.start_at
+    end
+
+    test "an all-day series starts on the master's date", %{
+      user: user,
+      source: source,
+      link: link
+    } do
+      expect(GoogleCalendarAPIMock, :get_event, fn _integration, _calendar_id, _event_id ->
+        {:ok,
+         %{
+           "id" => "master_abc123",
+           "recurrence" => ["RRULE:FREQ=WEEKLY;BYDAY=TU"],
+           "start" => %{"date" => "2026-03-03"},
+           "end" => %{"date" => "2026-03-04"}
+         }}
+      end)
+
+      test_pid = self()
+
+      expect(Tymeslot.CalendarMock, :create_event, fn event_data, _context ->
+        send(test_pid, {:payload, event_data})
+        {:ok, %{provider_event_id: "target-pid-1"}}
+      end)
+
+      instance =
+        weekly_instance(source, %{
+          all_day: true,
+          start_at: nil,
+          end_at: nil,
+          start_date: ~D[2026-12-15],
+          end_date: ~D[2026-12-16]
+        })
+
+      assert :ok == Engine.mirror(link, instance, user.id)
+
+      assert_received {:payload, payload}
+
+      # The all-day branch has to follow the master too, and has to keep
+      # emitting `Date` values: every outbound mapper reads the *type* to decide
+      # whether it is writing an all-day event.
+      assert payload.all_day == true
+      assert payload.start_time == ~D[2026-03-03]
+      assert payload.end_time == ~D[2026-03-04]
     end
 
     test "a full_passthrough link still carries the rule, and still no attendees", %{
@@ -506,7 +568,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineRecurrenceTest do
 
       test_pid = self()
 
-      expect(Tymeslot.CalendarMock, :delete_event, fn uid, _context ->
+      expect(Tymeslot.CalendarMock, :delete_event, fn uid, _context, _opts ->
         send(test_pid, {:deleted, uid})
         :ok
       end)
@@ -525,6 +587,38 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineRecurrenceTest do
                )
 
       assert [] == CalendarSyncMirrorQueries.list_for_link(link.id)
+    end
+  end
+
+  describe "the series master is fetched once, not once per link" do
+    test "two links onto the same series share one master fetch", ctx do
+      %{user: user, source: source, link: first} = ctx
+      {_second_target, built} = extra_target_link(ctx)
+
+      # Reloaded for the same reason the setup reloads the first: the master
+      # fetch needs the source integration, and a factory-built link carries an
+      # unloaded association the engine skips on.
+      {:ok, second} = CalendarSyncLinkQueries.get(built.id)
+
+      # One expectation, so a second call fails the test through Mox. The
+      # fan-out is per link — the sync path enqueues a job each — and the master
+      # is identical for both: a calendar with fifty series on three links would
+      # otherwise ask for a hundred and fifty masters where fifty exist, every
+      # sweep, against the quota the user-facing paths share.
+      expect_master(["RRULE:FREQ=WEEKLY;BYDAY=TU"])
+
+      expect(Tymeslot.CalendarMock, :create_event, 2, fn _event_data, _context ->
+        {:ok, %{provider_event_id: "target-pid"}}
+      end)
+
+      instance = weekly_instance(source)
+
+      assert :ok == Engine.mirror(first, instance, user.id)
+      assert :ok == Engine.mirror(second, instance, user.id)
+
+      # Both links still got their own placeholder; only the read was shared.
+      assert [_one] = CalendarSyncMirrorQueries.list_for_link(first.id)
+      assert [_two] = CalendarSyncMirrorQueries.list_for_link(second.id)
     end
   end
 end

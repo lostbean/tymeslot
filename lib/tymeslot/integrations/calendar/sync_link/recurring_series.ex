@@ -89,6 +89,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.RecurringSeries do
 
   alias Tymeslot.Infrastructure.Config
   alias Tymeslot.Integrations.Calendar.CalendarIntegrationSchema
+  alias Tymeslot.Integrations.Calendar.SyncLink.SeriesMasterCache
 
   @typedoc """
   A series as its master describes it.
@@ -109,7 +110,30 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.RecurringSeries do
   have. A *moved* occurrence is not here at all and cannot be — see the
   moduledoc's note on `singleEvents=true`.
   """
-  @type series :: %{recurrence_rule: String.t(), exceptions: [String.t()]}
+  @typedoc """
+  Everything the master says about the series, and all of it is needed.
+
+  The rule alone is not a series: it says "and then every week" without saying
+  when the first occurrence is. That is the timing's job, and taking it from the
+  cached row instead pairs the master's rule with an expanded instance's start —
+  the last one, under `singleEvents=true` — which describes a series beginning
+  where the real one ends.
+
+  The timing keys mirror `ProviderCalendarEventSchema`'s own split, so the
+  payload builder reads them exactly as it reads a source event: `all_day` with
+  `start_date`/`end_date`, or a timed pair in `start_at`/`end_at`. `all_day` is
+  `nil` when the master's timing could not be read at all, which the caller
+  treats as "no series to describe" rather than defaulting either way.
+  """
+  @type series :: %{
+          recurrence_rule: String.t(),
+          exceptions: [String.t()],
+          all_day: boolean() | nil,
+          start_at: DateTime.t() | nil,
+          end_at: DateTime.t() | nil,
+          start_date: Date.t() | nil,
+          end_date: Date.t() | nil
+        }
 
   @typedoc """
   Why no series could be described. Every one of these means "write no
@@ -165,7 +189,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.RecurringSeries do
   defp fetch_series(_source, _integration), do: {:skip, :no_series_master}
 
   defp request_master(api, integration, calendar_id, master_id) do
-    case api.get_event(integration, calendar_id, master_id) do
+    case cached_master(api, integration, calendar_id, master_id) do
       {:ok, master} ->
         read_recurrence(master, master_id)
 
@@ -181,6 +205,31 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.RecurringSeries do
 
         {:skip, :master_fetch_failed}
     end
+  end
+
+  # One master, however many links mirror the series onto however many
+  # calendars. The fan-out is per link — the sync path enqueues a job each — so
+  # a calendar with fifty series on three links asks for a hundred and fifty
+  # masters where fifty distinct ones exist, every sweep, against the quota the
+  # user-facing paths share.
+  #
+  # Those jobs run *together*, which is why the cache has to coalesce rather
+  # than merely store: without it every duplicate misses, fetches, and stores
+  # the same answer before any of them has written it. `get_or_compute/3` holds
+  # the concurrent callers on the first request.
+  #
+  # Only `{:ok, _}` is retained: `cache_errors: false` is what keeps a failed
+  # fetch out of the table. A failure means "no placeholder this pass", and
+  # storing it would turn one provider hiccup into two minutes of skipped
+  # mirrors across every link. `CacheStore` reads that from the `{:error, _}`
+  # shape, which is the shape `get_event/3` already answers with.
+  defp cached_master(api, integration, calendar_id, master_id) do
+    SeriesMasterCache.get_or_compute(
+      {integration.id, master_id},
+      fn -> api.get_event(integration, calendar_id, master_id) end,
+      :timer.minutes(2),
+      cache_errors: false
+    )
   end
 
   # Google sends `recurrence` as a list of iCalendar property lines in no
@@ -202,12 +251,66 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.RecurringSeries do
 
       rrule ->
         {:ok,
-         %{
-           recurrence_rule: rrule,
-           exceptions: Enum.filter(lines, &String.starts_with?(&1, "EXDATE"))
-         }}
+         Map.merge(
+           %{
+             recurrence_rule: rrule,
+             exceptions: Enum.filter(lines, &String.starts_with?(&1, "EXDATE"))
+           },
+           timing(master)
+         )}
     end
   end
+
+  # The master's own start and end, and they are not optional decoration.
+  #
+  # A recurrence rule says "and then every week"; it says nothing about when the
+  # first occurrence is. That comes from DTSTART, and pairing the master's rule
+  # with the *cached row's* start is the failure this module was written to
+  # prevent, arrived at one step later. Under `singleEvents=true` the row is an
+  # expanded instance and `upsert_batch/1` keeps the last of them, so a series
+  # running since March is cached as its December occurrence: "every Tuesday
+  # from December, forever" leaves every real occurrence unblocked and blocks
+  # every date after the series ends.
+  #
+  # It is also what makes the EXDATEs mean anything. RFC 5545 matches an EXDATE
+  # against the occurrences DTSTART generates, so a cancellation lands only when
+  # both come from the same event. Carried from different events they exclude
+  # nothing, and a cancelled occurrence goes on blocking time while appearing to
+  # have been handled.
+  #
+  # `nil` on either side is left for the caller to notice rather than defaulted:
+  # a master whose timing cannot be read is not a series anyone can describe.
+  defp timing(master) do
+    case {parse_point(Map.get(master, "start")), parse_point(Map.get(master, "end"))} do
+      {%Date{} = start_date, %Date{} = end_date} ->
+        %{all_day: true, start_at: nil, end_at: nil, start_date: start_date, end_date: end_date}
+
+      {%DateTime{} = start_at, %DateTime{} = end_at} ->
+        %{all_day: false, start_at: start_at, end_at: end_at, start_date: nil, end_date: nil}
+
+      _unreadable ->
+        %{all_day: nil, start_at: nil, end_at: nil, start_date: nil, end_date: nil}
+    end
+  end
+
+  # The two shapes Google uses, and nothing else. A malformed value answers nil
+  # rather than raising: this runs inside a sync job, where a raise is a crashed
+  # worker and a nil is a skipped mirror the sweep retries.
+  defp parse_point(%{"dateTime" => value}) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, at, _offset} -> DateTime.shift_zone!(at, "Etc/UTC")
+      _error -> nil
+    end
+  end
+
+  defp parse_point(%{"date" => value}) when is_binary(value) do
+    case Date.from_iso8601(value) do
+      {:ok, date} -> date
+      _error -> nil
+    end
+  end
+
+  defp parse_point(_other), do: nil
 
   # The calendar the *instance* was synced from, first. One integration can
   # cover several Google calendars, and the master lives on the same one its

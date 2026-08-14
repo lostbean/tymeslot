@@ -177,7 +177,8 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.MirrorPayload do
   """
   @type opts :: [
           recurrence_rule: String.t() | nil,
-          recurrence_exception_lines: [String.t()] | nil
+          recurrence_exception_lines: [String.t()] | nil,
+          timing: map() | nil
         ]
 
   @doc """
@@ -224,11 +225,30 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.MirrorPayload do
       status: :confirmed
     }
     |> Map.merge(content(source, effective_tier(source, link), link.generic_label))
-    |> Map.merge(timing(source))
+    |> Map.merge(timing(timing_source(source, Keyword.get(opts, :timing))))
     |> Map.put(:timezone, Map.get(source, :timezone))
     |> put_present(:recurrence_rule, Keyword.get(opts, :recurrence_rule))
     |> put_present(:recurrence_exception_lines, Keyword.get(opts, :recurrence_exception_lines))
   end
+
+  # A recurring placeholder is timed by its series, not by the row that happened
+  # to be cached for it. A rule says "and then every week" and nothing about
+  # when the first occurrence falls; that is DTSTART's job, and taking it from
+  # the cached row pairs the master's rule with an arbitrary instance's start.
+  # Under `singleEvents=true` that instance is the *last* one, so the
+  # placeholder would describe a series beginning where the real one ends.
+  #
+  # It is also what makes the EXDATE lines carried alongside mean anything:
+  # RFC 5545 matches them against the occurrences DTSTART generates, so a
+  # cancellation only lands when both come from the same event.
+  #
+  # A one-off event passes `nil` here and keeps the source's own timing, which
+  # is the only timing it has.
+  defp timing_source(source, nil), do: source
+
+  defp timing_source(source, %{all_day: nil}), do: source
+
+  defp timing_source(_source, series_timing), do: series_timing
 
   @doc "The title every `busy_only` placeholder carries."
   @spec busy_title() :: String.t()
