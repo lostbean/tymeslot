@@ -44,6 +44,7 @@ defmodule TymeslotWeb.Components.Dashboard.Integrations.Calendar.SyncLinkMatrix 
   attr :links, :list, required: true
   attr :error, :string, default: nil
   attr :target, :any, required: true
+  attr :selected_link_id, :integer, default: nil
 
   @spec sync_link_matrix(map()) :: Phoenix.LiveView.Rendered.t()
   def sync_link_matrix(assigns) do
@@ -80,37 +81,86 @@ defmodule TymeslotWeb.Components.Dashboard.Integrations.Calendar.SyncLinkMatrix 
         phx-target={@target}
         class="space-y-4"
       >
-        <div class="overflow-x-auto">
-          <table class="w-full border-collapse text-token-sm">
+        <%!-- `w-auto`, not `w-full`. A table told to fill the page spreads two
+              columns across the whole viewport and the grid stops reading as a
+              grid: the cells end up marooned, far from the labels that give
+              them meaning. Sizing to content keeps rows and columns adjacent
+              however few calendars there are. --%>
+        <div class="overflow-x-auto pb-2">
+          <table class="w-auto border-collapse text-token-sm">
             <thead>
               <tr>
-                <th class="p-2 text-left font-semibold text-tymeslot-500">
+                <%!-- The corner cell. `sr-only` text rather than an empty
+                      header, so the table still announces what its axes mean. --%>
+                <th class="p-1 text-left align-bottom">
                   <span class="sr-only">
                     {dgettext("dashboard_integrations", "Mirror from")}
                   </span>
                 </th>
+                <%!-- Column labels run vertically. A calendar named after an
+                      account is far too long to sit horizontally over a 2rem
+                      column, and truncating it produced headers reading
+                      "Google Calendar — ta…", which is exactly the ambiguity
+                      the label was introduced to remove. Rotated, the whole
+                      name fits in a column no wider than its checkbox. --%>
                 <th
                   :for={target <- @calendars}
                   scope="col"
-                  class="p-2 text-left align-bottom font-semibold text-tymeslot-700"
+                  class="h-40 w-9 p-1 align-bottom"
                 >
-                  <span class="block max-w-[10rem] truncate">
-                    {DisplayHelpers.integration_label(target)}
-                  </span>
+                  <div class="flex h-full w-9 items-end justify-center">
+                    <span
+                      class="whitespace-nowrap text-token-xs font-semibold text-tymeslot-700"
+                      style="writing-mode: vertical-rl; transform: rotate(180deg);"
+                      title={DisplayHelpers.integration_label(target)}
+                    >
+                      {DisplayHelpers.integration_label(target)}
+                    </span>
+                  </div>
                 </th>
               </tr>
             </thead>
             <tbody>
               <tr :for={source <- @calendars} class="border-t border-tymeslot-100">
-                <th scope="row" class="p-2 text-left font-semibold text-tymeslot-700">
-                  <span class="block max-w-[10rem] truncate">
-                    {DisplayHelpers.integration_label(source)}
-                  </span>
+                <%!-- Row labels stay horizontal and are not truncated: they sit
+                      in the one column that can afford the width. --%>
+                <th
+                  scope="row"
+                  class="whitespace-nowrap py-1 pr-4 text-left text-token-xs font-semibold text-tymeslot-700"
+                >
+                  {DisplayHelpers.integration_label(source)}
                 </th>
-                <td :for={target <- @calendars} class="p-2 text-center">
-                  <span :if={source.id == target.id} class="text-tymeslot-300" aria-hidden="true">
-                    ·
-                  </span>
+                <td
+                  :for={target <- @calendars}
+                  class={[
+                    "w-9 p-1 text-center",
+                    source.id == target.id && "bg-tymeslot-50"
+                  ]}
+                >
+                  <%!-- The diagonal is drawn as a disabled checkbox rather than
+                        left blank. A calendar cannot mirror onto itself — the
+                        `calendar_sync_links_no_self_link` constraint refuses
+                        it — but an empty cell removes the visual anchor that
+                        makes a grid readable as a grid, and the eye loses which
+                        row it is on. Disabled and shaded says "this is the
+                        cell where a calendar meets itself" without offering
+                        anything. --%>
+                  <input
+                    :if={source.id == target.id}
+                    type="checkbox"
+                    disabled
+                    title={
+                      dgettext(
+                        "dashboard_integrations",
+                        "A calendar cannot mirror onto itself."
+                      )
+                    }
+                    class="h-4 w-4 cursor-not-allowed rounded-token-sm border-tymeslot-300 opacity-30"
+                  />
+                  <%!-- The hidden "false" is what makes clearing a cell
+                        expressible: an unchecked box submits nothing at all,
+                        which the handler cannot tell apart from a cell that was
+                        never offered. --%>
                   <input
                     :if={source.id != target.id and not blocked?(target)}
                     type="hidden"
@@ -134,17 +184,38 @@ defmodule TymeslotWeb.Components.Dashboard.Integrations.Calendar.SyncLinkMatrix 
                     }
                     class="h-4 w-4 rounded-token-sm border-tymeslot-300 text-tymeslot-600 disabled:cursor-not-allowed disabled:opacity-40"
                   />
+                  <%!-- Only a cell with a link behind it can be configured, so
+                        the button exists only where one does. It sits under the
+                        checkbox rather than replacing it: ticking is what
+                        creates the link, this is what refines it. --%>
+                  <button
+                    :if={link_for(@links, source, target)}
+                    type="button"
+                    phx-click="select_sync_cell"
+                    phx-value-id={link_id_for(@links, source, target)}
+                    phx-target={@target}
+                    title={dgettext("dashboard_integrations", "Configure this link")}
+                    class={[
+                      "mx-auto mt-1 block h-1.5 w-1.5 rounded-full",
+                      (@selected_link_id == link_id_for(@links, source, target) &&
+                         "bg-tymeslot-900") || "bg-tymeslot-300 hover:bg-tymeslot-600"
+                    ]}
+                  >
+                    <span class="sr-only">
+                      {dgettext("dashboard_integrations", "Configure this link")}
+                    </span>
+                  </button>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
 
-        <div class="flex items-center justify-between gap-3">
+        <div class="flex flex-wrap items-center justify-between gap-3">
           <p class="text-token-xs text-tymeslot-500">
             {dgettext(
               "dashboard_integrations",
-              "A greyed cell belongs to a read-only calendar, which can send but never receive."
+              "A greyed cell belongs to a read-only calendar, which can send but never receive. Click the dot under a ticked cell to configure that link."
             )}
           </p>
           <button
@@ -222,6 +293,22 @@ defmodule TymeslotWeb.Components.Dashboard.Integrations.Calendar.SyncLinkMatrix 
   # scan of every link per cell — a 5×5 grid asks this twenty times.
   defp linked_pairs(links) do
     MapSet.new(links, &{&1.source_integration_id, &1.target_integration_id})
+  end
+
+  # The link behind a cell, or `nil` where the pair is not linked. Scanned
+  # rather than indexed because a grid is small — the list is one row per
+  # configured link, not per possible pair.
+  defp link_for(links, source, target) do
+    Enum.find(links, fn link ->
+      link.source_integration_id == source.id and link.target_integration_id == target.id
+    end)
+  end
+
+  defp link_id_for(links, source, target) do
+    case link_for(links, source, target) do
+      nil -> nil
+      link -> link.id
+    end
   end
 
   defp blocked?(target), do: not Capability.supports?(target.provider, :mirror_target)

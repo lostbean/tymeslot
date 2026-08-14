@@ -4,9 +4,9 @@ defmodule TymeslotWeb.Dashboard.SyncLinksIntegrationLabelsTest do
 
   The reported problem: connecting two Google accounts stores the same
   hardcoded name for both — `google_oauth_helper.ex` writes the literal
-  `"Google Calendar"` and nothing downstream revisits it — so the source and
-  target selects offer two identical options and picking a direction is a
-  guess. Both rows already carry the account they differ in.
+  `"Google Calendar"` and nothing downstream revisits it — so the grid's row
+  and column headers read identically and picking a direction is a guess. Both
+  rows already carry the account they differ in.
 
   Kept apart from `SyncLinksSettingsTest` because it covers what the panel
   *calls* the calendars rather than what it does with them, and because that
@@ -42,17 +42,26 @@ defmodule TymeslotWeb.Dashboard.SyncLinksIntegrationLabelsTest do
     )
   end
 
-  defp source_option_labels(html) do
-    # The prompt option carries no value; only the calendars are of interest.
+  # The grid names each calendar twice — once down the side as a mirror source,
+  # once across the top as a mirror target — and both have to be unambiguous:
+  # an organiser reads the row to know what is being copied and the column to
+  # know where it lands. The corner cell carries only screen-reader text and
+  # names no calendar, so it is dropped.
+  defp row_header_labels(html),
+    do: grid_headers(html, ~s(#sync-link-matrix-form tbody th[scope="row"]))
+
+  defp column_header_labels(html),
+    do: grid_headers(html, ~s(#sync-link-matrix-form thead th[scope="col"]))
+
+  defp grid_headers(html, selector) do
     html
     |> Floki.parse_document!()
-    |> Floki.find(~s(select[name="sync_link[source_integration_id]"] option))
-    |> Enum.reject(&(Floki.attribute(&1, "value") in [[], [""]]))
+    |> Floki.find(selector)
     |> Enum.map(&String.trim(Floki.text(&1)))
   end
 
   describe "telling two accounts of one provider apart" do
-    test "qualifies each option with its account", %{conn: conn, user: user} do
+    test "qualifies each grid header with its account", %{conn: conn, user: user} do
       google_account(user, "organiser@example.com")
       google_account(user, "second@example.com")
 
@@ -62,19 +71,22 @@ defmodule TymeslotWeb.Dashboard.SyncLinksIntegrationLabelsTest do
       assert html =~ "second@example.com"
     end
 
-    test "leaves no option carrying the bare provider name", %{conn: conn, user: user} do
+    test "leaves no grid header carrying the bare provider name", %{conn: conn, user: user} do
       google_account(user, "organiser@example.com")
       google_account(user, "second@example.com")
 
       {:ok, _view, html} = live(conn, ~p"/dashboard/integrations?tab=sync_links")
 
       # The failure this guards is subtler than a missing email: qualifying one
-      # option and not the other still leaves an ambiguous pair. No option may
-      # read as the unqualified constant.
-      labels = source_option_labels(html)
+      # header and not the other still leaves an ambiguous pair. No header on
+      # either axis may read as the unqualified constant.
+      rows = row_header_labels(html)
+      columns = column_header_labels(html)
 
-      assert length(labels) == 2
-      refute Enum.any?(labels, &(&1 == "Google Calendar"))
+      assert length(rows) == 2
+      assert length(columns) == 2
+      refute Enum.any?(rows, &(&1 == "Google Calendar"))
+      refute Enum.any?(columns, &(&1 == "Google Calendar"))
     end
 
     test "names both ends of a saved link by account", %{conn: conn, user: user} do
@@ -118,7 +130,8 @@ defmodule TymeslotWeb.Dashboard.SyncLinksIntegrationLabelsTest do
 
       {:ok, _view, html} = live(conn, ~p"/dashboard/integrations?tab=sync_links")
 
-      assert "Work Google" in source_option_labels(html)
+      assert "Work Google" in row_header_labels(html)
+      assert "Work Google" in column_header_labels(html)
     end
   end
 end

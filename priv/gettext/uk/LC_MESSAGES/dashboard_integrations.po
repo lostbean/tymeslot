@@ -167,6 +167,7 @@ msgstr "Календарі"
 msgid "Cancel"
 msgstr "Скасувати"
 
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_settings_panel.ex
 #: lib/tymeslot_web/components/dashboard/integrations/shared/ui_components.ex
 #: lib/tymeslot_web/live/dashboard/service_settings/component_view.ex
 #, elixir-autogen, elixir-format
@@ -1274,6 +1275,7 @@ msgstr[2] "%{count} майбутніх бронювань досі викори�
 msgid "Also delete their meeting rooms. Attendees who already have the join link will find it no longer works."
 msgstr "Також видалити їхні кімнати для зустрічей. Учасники, які вже мають посилання на приєднання, побачать, що воно більше не працює."
 
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_settings_panel.ex
 #: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
 #, elixir-autogen, elixir-format
 msgid "%{source} to %{target}"
@@ -1283,11 +1285,6 @@ msgstr "%{source} до %{target}"
 #, elixir-autogen, elixir-format
 msgid "Active links"
 msgstr "Активні зв'язки"
-
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
-#, elixir-autogen, elixir-format
-msgid "Add a link"
-msgstr "Додати зв'язок"
 
 #: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
 #, elixir-autogen, elixir-format
@@ -1302,20 +1299,10 @@ msgstr "Синхронізація календарів"
 
 #: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
 #, elixir-autogen, elixir-format
-msgid "Choose a calendar"
-msgstr "Оберіть календар"
-
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
-#, elixir-autogen, elixir-format
 msgid "Connect a second calendar before setting up mirroring."
 msgstr "Підключіть другий календар, перш ніж налаштовувати дзеркалення."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
-#, elixir-autogen, elixir-format
-msgid "Create link"
-msgstr "Створити зв'язок"
-
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_settings_panel.ex
 #, elixir-autogen, elixir-format
 msgid "Default calendar"
 msgstr "Календар за замовчуванням"
@@ -1332,19 +1319,10 @@ msgstr "Загальна назва"
 
 #: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
 #, elixir-autogen, elixir-format
-msgid "Mirror events from"
-msgstr "Дзеркалити події з"
-
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
-#, elixir-autogen, elixir-format
 msgid "Mirror one calendar's events onto another as busy placeholders, so tools booking against the second calendar see the time as taken."
 msgstr "Дзеркальте події одного календаря в інший як позначки зайнятості, щоб інструменти, які бронюють у другому календарі, бачили цей час як зайнятий."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
-#, elixir-autogen, elixir-format
-msgid "Onto"
-msgstr "До"
-
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_settings_panel.ex
 #: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
 #, elixir-autogen, elixir-format
 msgid "Pause"
@@ -1355,12 +1333,13 @@ msgstr "Призупинити"
 msgid "Remove"
 msgstr "Видалити"
 
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_settings_panel.ex
 #: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
 #, elixir-autogen, elixir-format
 msgid "Resume"
 msgstr "Відновити"
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_settings_panel.ex
 #, elixir-autogen, elixir-format
 msgid "Show as"
 msgstr "Показувати як"
@@ -1380,7 +1359,7 @@ msgstr "Показується як зайнято, без деталей"
 msgid "Shown with the original title"
 msgstr "Показується з початковою назвою"
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_settings_panel.ex
 #, elixir-autogen, elixir-format
 msgid "Target calendar"
 msgstr "Цільовий календар"
@@ -1390,7 +1369,7 @@ msgstr "Цільовий календар"
 msgid "That calendar could not be linked."
 msgstr "Не вдалося пов'язати цей календар."
 
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_settings_panel.ex
 #, elixir-autogen, elixir-format
 msgid "This provider always writes to its primary calendar."
 msgstr "Цей постачальник завжди записує до свого основного календаря."
@@ -1462,16 +1441,6 @@ msgstr "Одну подію цієї серії перенесли. Познач
 
 #: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
 #, elixir-autogen, elixir-format
-msgid "Personal commitment"
-msgstr "Особисті справи"
-
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
-#, elixir-autogen, elixir-format
-msgid "Placeholder title"
-msgstr "Назва позначки"
-
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
-#, elixir-autogen, elixir-format
 msgid "Shown as \"%{label}\""
 msgstr "Показується як «%{label}»"
 
@@ -1512,11 +1481,6 @@ msgstr "Це зв'язування"
 
 #: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
 #, elixir-autogen, elixir-format
-msgid "A greyed cell belongs to a read-only calendar, which can send but never receive."
-msgstr "Сіра клітинка належить календарю лише для читання, який може надсилати, але ніколи не отримувати."
-
-#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
-#, elixir-autogen, elixir-format
 msgid "Link grid"
 msgstr "Сітка зв'язків"
 
@@ -1539,3 +1503,38 @@ msgstr "Цей календар доступний лише для читанн�
 #, elixir-autogen, elixir-format
 msgid "Tick a cell to mirror events from the calendar in that row onto the calendar in that column."
 msgstr "Позначте клітинку, щоб дзеркалити події календаря цього рядка на календар цього стовпця."
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
+#, elixir-autogen, elixir-format
+msgid "A calendar cannot mirror onto itself."
+msgstr "Календар не може дзеркалити сам на себе."
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
+#, elixir-autogen, elixir-format
+msgid "A greyed cell belongs to a read-only calendar, which can send but never receive. Click the dot under a ticked cell to configure that link."
+msgstr "Сіра клітинка належить календарю лише для читання, який може надсилати, але ніколи не отримувати. Натисніть крапку під позначеною клітинкою, щоб налаштувати цей зв'язок."
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_settings_panel.ex
+#, elixir-autogen, elixir-format
+msgid "Busy"
+msgstr "Зайнято"
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_matrix.ex
+#, elixir-autogen, elixir-format
+msgid "Configure this link"
+msgstr "Налаштувати цей зв'язок"
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_settings_panel.ex
+#, elixir-autogen, elixir-format
+msgid "Label"
+msgstr "Підпис"
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_settings_panel.ex
+#, elixir-autogen, elixir-format
+msgid "Save settings"
+msgstr "Зберегти налаштування"
+
+#: lib/tymeslot_web/components/dashboard/integrations/calendar/sync_link_settings_panel.ex
+#, elixir-autogen, elixir-format
+msgid "Settings for this link"
+msgstr "Налаштування цього зв'язку"

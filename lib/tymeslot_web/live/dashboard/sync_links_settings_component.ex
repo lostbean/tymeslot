@@ -65,6 +65,7 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
   alias Tymeslot.Security.RateLimiter
   alias TymeslotWeb.Components.CoreComponents.Forms
   alias TymeslotWeb.Components.Dashboard.Integrations.Calendar.SyncLinkMatrix
+  alias TymeslotWeb.Components.Dashboard.Integrations.Calendar.SyncLinkSettingsPanel
   alias TymeslotWeb.Dashboard.SyncLinks.ConflictLabels
 
   @impl Phoenix.LiveComponent
@@ -75,7 +76,10 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
      |> assign(:conflicts, %{})
      |> assign(:form_values, %{})
      |> assign(:form_error, nil)
-     |> assign(:matrix_error, nil)}
+     |> assign(:matrix_error, nil)
+     |> assign(:selected_link_id, nil)
+     |> assign(:settings_values, %{})
+     |> assign(:settings_error, nil)}
   end
 
   @impl Phoenix.LiveComponent
@@ -89,21 +93,58 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
      |> assign(:conflicts, ConflictHistory.recent_for_user(user_id))
      |> assign_new(:form_values, fn -> %{} end)
      |> assign_new(:form_error, fn -> nil end)
-     |> assign_new(:matrix_error, fn -> nil end)}
+     |> assign_new(:matrix_error, fn -> nil end)
+     |> assign_new(:selected_link_id, fn -> nil end)
+     |> assign_new(:settings_values, fn -> %{} end)
+     |> assign_new(:settings_error, fn -> nil end)}
   end
 
+  # Selecting a cell is a read: it opens the settings for a link the organiser
+  # can already see. The id arrives off the wire, so the link is looked up in
+  # the assigns rather than trusted — a forged id finds nothing and the panel
+  # stays as it was, which also declines to tell a prober whether the id
+  # existed.
   @impl Phoenix.LiveComponent
-  def handle_event("validate_sync_link", %{"sync_link" => params}, socket) do
-    {:noreply, assign(socket, :form_values, params)}
+  def handle_event("select_sync_cell", %{"id" => id}, socket) do
+    case Enum.find(socket.assigns.links, &(&1.id == cast_id(id))) do
+      nil ->
+        {:noreply, socket}
+
+      link ->
+        {:noreply,
+         socket
+         |> assign(:selected_link_id, link.id)
+         |> assign(:settings_values, %{})
+         |> assign(:settings_error, nil)}
+    end
   end
 
-  def handle_event("create_sync_link", %{"sync_link" => params}, socket) do
+  def handle_event("deselect_sync_cell", _params, socket) do
+    {:noreply, clear_selection(socket)}
+  end
+
+  # The tier drives whether a label field is asked for, so the form round-trips
+  # through here to keep that decision on the latest choice rather than on what
+  # was stored when the panel opened.
+  def handle_event("validate_sync_link_settings", %{"sync_link" => params}, socket) do
+    {:noreply, assign(socket, :settings_values, params)}
+  end
+
+  def handle_event("save_sync_link_settings", %{"sync_link" => params}, socket) do
     user_id = socket.assigns.current_user.id
 
-    case RateLimiter.check_sync_link_write_rate_limit(user_id) do
-      :ok -> create_link(socket, user_id, params)
-      {:error, :rate_limited, message} -> {:noreply, assign(socket, :form_error, message)}
-      {:error, :invalid_user_id} -> {:noreply, assign(socket, :form_error, generic_error())}
+    case {socket.assigns.selected_link_id, RateLimiter.check_sync_link_write_rate_limit(user_id)} do
+      {nil, _limit} ->
+        {:noreply, socket}
+
+      {link_id, :ok} ->
+        save_settings(socket, user_id, link_id, params)
+
+      {_link_id, {:error, :rate_limited, message}} ->
+        {:noreply, assign(socket, :settings_error, message)}
+
+      {_link_id, {:error, :invalid_user_id}} ->
+        {:noreply, assign(socket, :settings_error, generic_error())}
     end
   end
 
@@ -171,27 +212,37 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
     end
   end
 
-  defp create_link(socket, user_id, params) do
-    case SyncLink.create_link(user_id, params) do
+  # `update_link/3` re-verifies ownership of both ends against the acting user,
+  # so a forged link id is refused there as well as at selection.
+  defp save_settings(socket, user_id, link_id, params) do
+    case SyncLink.update_link(user_id, link_id, params) do
       {:ok, _link} ->
+        # The selection is kept rather than cleared: a save that closed the
+        # panel would make a second change to the same link a fresh hunt for
+        # its cell. Cleared *values* though, so the panel re-reads what was
+        # actually stored rather than echoing the submission back.
         {:noreply,
          socket
-         |> assign(:form_values, %{})
-         |> assign(:form_error, nil)
+         |> assign(:settings_values, %{})
+         |> assign(:settings_error, nil)
          |> refresh(user_id)}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply,
          socket
-         |> assign(:form_values, params)
-         |> assign(:form_error, first_error(changeset))}
+         |> assign(:settings_values, params)
+         |> assign(:settings_error, first_error(changeset))}
 
       {:error, :not_found} ->
-        {:noreply,
-         socket
-         |> assign(:form_values, params)
-         |> assign(:form_error, generic_error())}
+        {:noreply, clear_selection(socket)}
     end
+  end
+
+  defp clear_selection(socket) do
+    socket
+    |> assign(:selected_link_id, nil)
+    |> assign(:settings_values, %{})
+    |> assign(:settings_error, nil)
   end
 
   defp apply_matrix(socket, user_id, cells) do
@@ -202,16 +253,25 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
          |> assign(:matrix_error, nil)
          |> refresh(user_id)}
 
-      {:error, _reason} ->
+      {:error, reason} ->
         # The grid is redrawn from what was actually stored rather than from
         # what was submitted: a partly-applied save is reported honestly, and
         # a redraw from the submitted state would show links that do not exist.
         {:noreply,
          socket
-         |> assign(:matrix_error, generic_error())
+         |> assign(:matrix_error, matrix_error_message(reason))
          |> refresh(user_id)}
     end
   end
+
+  # A changeset already worked out *why* — that the target is a read-only
+  # subscription, say — and collapsing that into "could not be linked" throws
+  # away the one sentence that tells the organiser whether to untick the cell
+  # or try again. Anything without a message of its own still falls back:
+  # `:not_found` means a forged id, and naming it would confirm to a prober
+  # which ids exist.
+  defp matrix_error_message(%Ecto.Changeset{} = changeset), do: first_error(changeset)
+  defp matrix_error_message(_reason), do: generic_error()
 
   # Sibling components render the same integrations from their own assigns and
   # have no PubSub to learn a link changed, so the dashboard is told to refresh
@@ -298,15 +358,6 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
         do: {DisplayHelpers.integration_label(integration), integration.id}
   end
 
-  # A subscription is excluded here rather than refused on submit; see the
-  # moduledoc.
-  defp target_options(integrations) do
-    for integration <- integrations,
-        integration.is_active,
-        Capability.supports?(integration.provider, :mirror_target),
-        do: {DisplayHelpers.integration_label(integration), integration.id}
-  end
-
   # No target selected yet is not "this target cannot choose a calendar" — it is
   # no target at all, and the note explaining the restriction would be claiming
   # something about a provider the organiser has not named. So `nil` gets its
@@ -324,14 +375,6 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
   defp target_without_calendar_choice?(%{provider: provider}) do
     Capability.supports?(provider, :mirror_target) and
       not Capability.supports?(provider, :target_calendar_choice)
-  end
-
-  defp selected_target(integrations, form_values) do
-    case Map.get(form_values, "target_integration_id") do
-      nil -> nil
-      "" -> nil
-      id -> Enum.find(integrations, &(to_string(&1.id) == to_string(id)))
-    end
   end
 
   # Only calendars the organiser has selected for syncing, and only writable
@@ -360,24 +403,28 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
     ]
   end
 
-  defp form_value(form_values, key, default \\ ""), do: Map.get(form_values, key, default)
+  defp selected_link(_links, nil), do: nil
+  defp selected_link(links, link_id), do: Enum.find(links, &(&1.id == link_id))
 
   @impl Phoenix.LiveComponent
   def render(assigns) do
-    target = selected_target(assigns.integrations, assigns.form_values)
+    selected = selected_link(assigns.links, assigns.selected_link_id)
+
+    # The picker's options come from the *link's* target, not from a form
+    # field: the pair is already decided by the cell that was clicked.
+    selected_target =
+      selected && Enum.find(assigns.integrations, &(&1.id == selected.target_integration_id))
 
     assigns =
       assigns
       |> assign(:source_options, source_options(assigns.integrations))
-      |> assign(:target_options, target_options(assigns.integrations))
-      |> assign(:selected_target, target)
-      |> assign(:target_without_calendar_choice?, target_without_calendar_choice?(target))
-      |> assign(:target_calendar_options, target_calendar_options(target))
-      |> assign(:privacy_tier_options, privacy_tier_options())
+      |> assign(:selected_link, selected)
       |> assign(
-        :generic_label_tier?,
-        form_value(assigns.form_values, "privacy_tier", "busy_only") == "generic_label"
+        :selected_without_calendar_choice?,
+        target_without_calendar_choice?(selected_target)
       )
+      |> assign(:selected_calendar_options, target_calendar_options(selected_target))
+      |> assign(:privacy_tier_options, privacy_tier_options())
 
     ~H"""
     <div class="space-y-8">
@@ -499,94 +546,18 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
         links={@links}
         error={@matrix_error}
         target={@myself}
+        selected_link_id={@selected_link_id}
       />
 
-      <section :if={length(@source_options) >= 2} class="space-y-4">
-        <h2 class="text-token-lg font-bold text-tymeslot-900">
-          {dgettext("dashboard_integrations", "Add a link")}
-        </h2>
-
-        <.form
-          for={%{}}
-          id="sync-link-form"
-          phx-submit="create_sync_link"
-          phx-change="validate_sync_link"
-          phx-target={@myself}
-          class="grid gap-4 sm:grid-cols-2"
-        >
-          <.input
-            type="select"
-            name="sync_link[source_integration_id]"
-            id="sync-link-source"
-            label={dgettext("dashboard_integrations", "Mirror events from")}
-            value={form_value(@form_values, "source_integration_id")}
-            options={@source_options}
-            prompt={dgettext("dashboard_integrations", "Choose a calendar")}
-          />
-
-          <.input
-            type="select"
-            name="sync_link[target_integration_id]"
-            id="sync-link-target"
-            label={dgettext("dashboard_integrations", "Onto")}
-            value={form_value(@form_values, "target_integration_id")}
-            options={@target_options}
-            prompt={dgettext("dashboard_integrations", "Choose a calendar")}
-          />
-
-          <%!-- Hidden for a target without `:target_calendar_choice`: the
-                CalDAV family ignores a calendar id and always writes to the
-                primary path. --%>
-          <.input
-            :if={not @target_without_calendar_choice? and @target_calendar_options != []}
-            type="select"
-            name="sync_link[target_calendar_id]"
-            id="sync-link-target-calendar"
-            label={dgettext("dashboard_integrations", "Target calendar")}
-            value={form_value(@form_values, "target_calendar_id")}
-            options={@target_calendar_options}
-            prompt={dgettext("dashboard_integrations", "Default calendar")}
-          />
-
-          <p :if={@target_without_calendar_choice?} class="self-end text-token-xs text-tymeslot-500">
-            {dgettext(
-              "dashboard_integrations",
-              "This provider always writes to its primary calendar."
-            )}
-          </p>
-
-          <.input
-            type="select"
-            name="sync_link[privacy_tier]"
-            id="sync-link-privacy-tier"
-            label={dgettext("dashboard_integrations", "Show as")}
-            value={form_value(@form_values, "privacy_tier", "busy_only")}
-            options={@privacy_tier_options}
-          />
-
-          <%!-- Only the tier that uses it. Rendered for the other two, the
-                field would ask for something neither writes: `busy_only` sends
-                an opaque title and `full_passthrough` copies the source's own,
-                and a label typed under either would be stored and never
-                appear. --%>
-          <.input
-            :if={@generic_label_tier?}
-            type="text"
-            name="sync_link[generic_label]"
-            id="sync-link-generic-label"
-            label={dgettext("dashboard_integrations", "Placeholder title")}
-            value={form_value(@form_values, "generic_label")}
-            maxlength="255"
-            placeholder={dgettext("dashboard_integrations", "Personal commitment")}
-          />
-
-          <div class="sm:col-span-2">
-            <.action_button type="submit">
-              {dgettext("dashboard_integrations", "Create link")}
-            </.action_button>
-          </div>
-        </.form>
-      </section>
+      <SyncLinkSettingsPanel.sync_link_settings
+        link={@selected_link}
+        values={@settings_values}
+        error={@settings_error}
+        tier_options={@privacy_tier_options}
+        calendar_options={@selected_calendar_options}
+        without_calendar_choice?={@selected_without_calendar_choice?}
+        target={@myself}
+      />
     </div>
     """
   end
