@@ -18,6 +18,7 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkQueries do
   import Ecto.Query
 
   alias Tymeslot.Integrations.Calendar.CalendarSyncLinkSchema
+  alias Tymeslot.Integrations.Calendar.CalendarSyncMirrorSchema
   alias Tymeslot.Repo
 
   @preloads [:source_integration, :target_integration]
@@ -109,6 +110,17 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkQueries do
   reconciled and is exactly the one whose mirrors are most likely to be
   missing.
 
+  A **disabled** link is included when it still holds mappings in
+  `pending_delete`, and that exception is load-bearing rather than tidy.
+  Teardown disables the link before withdrawing its placeholders, so a provider
+  that refuses the delete leaves exactly that combination: a disabled link whose
+  busy blocks are still on someone's calendar. Filtering on `enabled` alone
+  removed those links from the retry mechanism their own teardown depends on —
+  the orphan the teardown exists to prevent, reached through its recovery path,
+  and reachable from link removal, calendar disconnect and account deletion
+  alike. An ordinarily paused link has no `pending_delete` rows and is still
+  skipped, which is what pausing means.
+
   No preloads: the sweep enqueues jobs keyed on `id` and never looks at either
   integration, so loading two per link would fetch rows nothing reads.
   """
@@ -116,8 +128,13 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkQueries do
   def list_due_for_reconcile(max_age_seconds) when is_integer(max_age_seconds) do
     cutoff = DateTime.add(DateTime.utc_now(), -max_age_seconds, :second)
 
-    CalendarSyncLinkSchema
-    |> where([l], l.enabled == true)
+    pending_delete =
+      from(m in CalendarSyncMirrorSchema,
+        where: m.sync_link_id == parent_as(:link).id and m.state == "pending_delete"
+      )
+
+    from(l in CalendarSyncLinkSchema, as: :link)
+    |> where([l], l.enabled == true or exists(subquery(pending_delete)))
     |> where([l], is_nil(l.last_reconciled_at) or l.last_reconciled_at < ^cutoff)
     |> order_by([l], asc: l.id)
     |> Repo.all()

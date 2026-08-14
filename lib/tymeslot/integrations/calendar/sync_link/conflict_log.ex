@@ -35,6 +35,37 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.ConflictLog do
   divergences in a history that is mostly noise. A conflict is logged only when
   two values were compared and found to differ.
 
+  ## KNOWN GAP: the three etag-based kinds do not currently fire
+
+  `mirror_edited`, `both_changed` and `delete_race` all require a stored
+  `target_etag` to compare against, and nothing can currently supply one, so in
+  production none of them is ever written. This is a real gap, stated here
+  rather than left for the next reader to discover from an audit that is quietly
+  empty. `write_failed` and `occurrence_moved` are unaffected and do fire.
+
+  The cause is that the engine has no way to learn the placeholder's etag *after*
+  it writes it. The provider returns it in the write response, but
+  `Events.update_event/3` narrows its contract to `:ok` and the body is dropped
+  before the engine sees it. Reading it back from the target's cache instead
+  records the *pre*-write value, which then reports the engine's own change as a
+  stranger's edit — a false row per write per series, which is worse than none:
+  this log is read when someone is trying to find out why a calendar looks
+  wrong, and it is worth nothing if most of what it holds is the engine
+  reporting itself.
+
+  Falling back to timestamps alone does not close it either. Our write stamps
+  `last_synced_at`; the provider stamps `provider_updated_at` when it applies
+  that same write, necessarily later. So "changed after our write" is true of
+  our own write as much as of a stranger's, and the two are indistinguishable
+  without an etag. Both directions were built and measured; each trades a false
+  positive for a false negative.
+
+  Closing it properly means carrying the write response's etag back to the
+  engine — widening `Events.update_event/3` and the shared provider behaviour,
+  which 89 references across six modules depend on. That is a deliberate piece
+  of work rather than a patch, and it is the one thing that would make these
+  three kinds real.
+
   ## Why `series_exceptions` is no longer produced
 
   Nothing here writes that kind any more, and the reason is that the divergence
@@ -92,8 +123,19 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.ConflictLog do
   alias Tymeslot.Integrations.Calendar.CalendarSyncMirrorSchema
   alias Tymeslot.Integrations.Calendar.ProviderCalendarEventQueries
 
+  # Written into `target_etag` once a divergence has been logged, so the retry
+  # that follows does not log it again. A real etag is a provider value and
+  # `nil` means "no baseline yet"; this is neither, and no provider can produce
+  # it. Exposed because the engine is what stamps it and this module is what
+  # reads it — a literal in both places would be two facts that must agree.
+  @consumed_baseline "tymeslot:recorded"
+
   @typedoc "The provider write a terminal failure was attempting."
   @type operation :: :create | :update | :delete
+
+  @doc "The sentinel a recorded divergence leaves in place of a baseline."
+  @spec consumed_baseline() :: String.t()
+  def consumed_baseline, do: @consumed_baseline
 
   @doc """
   Records the divergence an about-to-be-overwritten placeholder represents, if
@@ -259,6 +301,12 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.ConflictLog do
   # at the previous write — through no organiser's doing. A change stamped no
   # later than that write is therefore the write itself, and only one stamped
   # after it is somebody else's edit.
+  # A divergence already recorded, and deliberately not recorded twice. The
+  # engine stamps this after logging a delete race, because the race survives
+  # into the retry — the placeholder's cached state does not change just because
+  # our delete failed — and one race is one event however many attempts it takes.
+  defp mirror_edited?(%{target_etag: @consumed_baseline}, _observed), do: false
+
   defp mirror_edited?(%{target_etag: written} = mirror, %{etag: observed} = placeholder)
        when is_binary(written) and is_binary(observed),
        do: written != observed and changed_after_write?(mirror, placeholder)

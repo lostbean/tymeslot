@@ -415,7 +415,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
   # compare, and there was never a second race to describe.
   defp consume_delete_race(mirror) do
     case ConflictLog.record_delete_race(mirror) do
-      :recorded -> mark(mirror, %{target_etag: nil})
+      :recorded -> mark(mirror, %{target_etag: ConflictLog.consumed_baseline()})
       :nothing_to_record -> mirror
     end
   end
