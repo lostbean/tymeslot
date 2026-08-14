@@ -143,12 +143,19 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkSchemaTest do
       assert link.privacy_tier == "busy_only"
     end
 
-    for tier <- ~w(busy_only generic_label full_passthrough) do
+    # `generic_label` carries its label, because that tier is the one whose
+    # rendering depends on a second field; see the `generic_label` describe
+    # block below for the rule.
+    for {tier, extra} <- [
+          {"busy_only", %{}},
+          {"generic_label", %{generic_label: "Personal commitment"}},
+          {"full_passthrough", %{}}
+        ] do
       test "accepts #{tier}", ctx do
         changeset =
           CalendarSyncLinkSchema.changeset(
             %CalendarSyncLinkSchema{},
-            attrs(ctx, %{privacy_tier: unquote(tier)})
+            attrs(ctx, Map.merge(%{privacy_tier: unquote(tier)}, unquote(Macro.escape(extra))))
           )
 
         assert changeset.valid?
@@ -164,6 +171,62 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkSchemaTest do
 
       refute changeset.valid?
       assert "is invalid" in errors_on(changeset).privacy_tier
+    end
+  end
+
+  describe "changeset/2 generic_label" do
+    # The tier promises a placeholder titled in the organiser's own words, and
+    # `MirrorPayload` degrades a blank label to the plain "Busy" title. A link
+    # accepted without one would therefore be described everywhere as showing a
+    # generic label while every placeholder it wrote read "Busy".
+    test "is required at the tier that renders it", ctx do
+      changeset =
+        CalendarSyncLinkSchema.changeset(
+          %CalendarSyncLinkSchema{},
+          attrs(ctx, %{privacy_tier: "generic_label"})
+        )
+
+      refute changeset.valid?
+      assert errors_on(changeset).generic_label != []
+    end
+
+    # Whitespace passes `validate_required/2` untouched and then renders as
+    # "Busy" — the same broken promise by a longer route — so blankness is
+    # measured the way `MirrorPayload` measures it.
+    test "treats a whitespace-only label as missing", ctx do
+      changeset =
+        CalendarSyncLinkSchema.changeset(
+          %CalendarSyncLinkSchema{},
+          attrs(ctx, %{privacy_tier: "generic_label", generic_label: "   "})
+        )
+
+      refute changeset.valid?
+      assert errors_on(changeset).generic_label != []
+    end
+
+    test "stores the label trimmed, so the row and the placeholder agree", ctx do
+      changeset =
+        CalendarSyncLinkSchema.changeset(
+          %CalendarSyncLinkSchema{},
+          attrs(ctx, %{privacy_tier: "generic_label", generic_label: "  Away  "})
+        )
+
+      assert changeset.valid?
+      assert Changeset.get_change(changeset, :generic_label) == "Away"
+    end
+
+    # The other two tiers never read the field, so requiring it there would
+    # block a link over a value that could not appear on any placeholder.
+    test "is not required at the tiers that ignore it", ctx do
+      for tier <- ~w(busy_only full_passthrough) do
+        changeset =
+          CalendarSyncLinkSchema.changeset(
+            %CalendarSyncLinkSchema{},
+            attrs(ctx, %{privacy_tier: tier})
+          )
+
+        assert changeset.valid?, "#{tier} should not require a generic label"
+      end
     end
   end
 

@@ -35,6 +35,7 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkSchema do
   needs exactly the query a changeset cannot run.
   """
   use Ecto.Schema
+  use Gettext, backend: TymeslotWeb.Gettext
 
   import Ecto.Changeset
 
@@ -115,17 +116,22 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkSchema do
     |> validate_target_writable()
     |> clear_calendar_id_when_target_cannot_choose()
     |> validate_inclusion(:privacy_tier, @privacy_tiers)
+    |> validate_generic_label()
     |> validate_colour()
     |> foreign_key_constraint(:user_id)
     |> foreign_key_constraint(:source_integration_id)
     |> foreign_key_constraint(:target_integration_id)
+    # Every message here is a `dgettext_noop` msgid, not a translated string.
+    # `Forms.translate_error/1` runs the stored message through the "errors"
+    # domain at render time, so translating it here would produce a string that
+    # misses the lookup there and reaches a German organiser in English.
     |> check_constraint(:target_integration_id,
       name: :calendar_sync_links_no_self_link,
-      message: "cannot mirror a calendar onto itself"
+      message: dgettext_noop("errors", "cannot mirror a calendar onto itself")
     )
     |> unique_constraint([:source_integration_id, :target_integration_id, :target_calendar_id],
       name: :calendar_sync_links_source_target_calendar_index,
-      message: "has already been linked"
+      message: dgettext_noop("errors", "has already been linked")
     )
   end
 
@@ -138,7 +144,11 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkSchema do
     target = get_field(changeset, :target_integration_id)
 
     if not is_nil(source) and source == target do
-      add_error(changeset, :target_integration_id, "cannot mirror a calendar onto itself")
+      add_error(
+        changeset,
+        :target_integration_id,
+        dgettext_noop("errors", "cannot mirror a calendar onto itself")
+      )
     else
       changeset
     end
@@ -160,7 +170,10 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkSchema do
           add_error(
             changeset,
             :target_integration_id,
-            "is a read-only subscription and cannot receive mirrored events"
+            dgettext_noop(
+              "errors",
+              "is a read-only subscription and cannot receive mirrored events"
+            )
           )
         end
     end
@@ -188,6 +201,39 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkSchema do
     end
   end
 
+  # The `generic_label` tier promises a placeholder titled with the organiser's
+  # own wording, and a link at that tier with no label cannot keep it:
+  # `MirrorPayload` degrades a blank label to the plain "Busy" title, so the
+  # dashboard would go on saying "Shown with a generic label" over placeholders
+  # that read "Busy". Refusing here is the only point where the organiser can
+  # act on it.
+  #
+  # The payload's fallback is not thereby redundant — it still answers for rows
+  # written before this validation existed and for the engine's own defensive
+  # path — but it is a last line, not the behaviour the form should rely on.
+  #
+  # Blankness is measured after trimming, matching `MirrorPayload` exactly. A
+  # label of three spaces passes `validate_required/2` and then renders "Busy",
+  # which is the same broken promise arrived at by a longer route. Storing the
+  # trimmed value keeps the row and the placeholder identical rather than
+  # differing by whitespace the organiser cannot see.
+  defp validate_generic_label(changeset) do
+    if get_field(changeset, :privacy_tier) == "generic_label" do
+      changeset
+      |> update_change(:generic_label, &trim_label/1)
+      |> validate_required([:generic_label],
+        message: dgettext_noop("errors", "is needed to title the placeholder")
+      )
+    else
+      changeset
+    end
+  end
+
+  # "" rather than a trimmed blank, so `validate_required/2` — which treats an
+  # empty string as missing — catches a whitespace-only label.
+  defp trim_label(value) when is_binary(value), do: String.trim(value)
+  defp trim_label(value), do: value
+
   # nil is a valid colour and means "inherit the target integration's".
   # Anything else must be a palette key, so a value from outside the picker
   # cannot reach the grid and resolve to a Tailwind class that was never
@@ -197,7 +243,7 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkSchema do
       if is_nil(value) or EventColour.valid_key?(value) do
         []
       else
-        [mirror_colour: "is not a palette colour"]
+        [mirror_colour: dgettext_noop("errors", "is not a palette colour")]
       end
     end)
   end

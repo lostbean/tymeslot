@@ -109,21 +109,16 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.RecurringSeries do
   unexamined would let the placeholder describe a series the source does not
   have. A *moved* occurrence is not here at all and cannot be — see the
   moduledoc's note on `singleEvents=true`.
-  """
-  @typedoc """
-  Everything the master says about the series, and all of it is needed.
 
-  The rule alone is not a series: it says "and then every week" without saying
-  when the first occurrence is. That is the timing's job, and taking it from the
-  cached row instead pairs the master's rule with an expanded instance's start —
-  the last one, under `singleEvents=true` — which describes a series beginning
-  where the real one ends.
-
-  The timing keys mirror `ProviderCalendarEventSchema`'s own split, so the
-  payload builder reads them exactly as it reads a source event: `all_day` with
-  `start_date`/`end_date`, or a timed pair in `start_at`/`end_at`. `all_day` is
-  `nil` when the master's timing could not be read at all, which the caller
-  treats as "no series to describe" rather than defaulting either way.
+  The timing keys are the master's own start and end, and they are not
+  decoration. A rule says "and then every week" without saying when the first
+  occurrence falls; that is DTSTART's job, and taking it from the cached row
+  instead pairs the master's rule with an expanded instance's start — the last
+  one — describing a series that begins where the real one ends. They mirror
+  `ProviderCalendarEventSchema`'s own split so the payload builder reads them
+  exactly as it reads a source event, and `all_day` is `nil` when the master's
+  timing could not be read at all, which the caller treats as "no series to
+  describe" rather than defaulting either way.
   """
   @type series :: %{
           recurrence_rule: String.t(),

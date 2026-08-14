@@ -1369,11 +1369,6 @@ msgstr "Shown as busy, with no detail"
 
 #: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
 #, elixir-autogen, elixir-format
-msgid "Shown with a generic label"
-msgstr "Shown with a generic label"
-
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
-#, elixir-autogen, elixir-format
 msgid "Shown with the original title"
 msgstr "Shown with the original title"
 
@@ -1456,3 +1451,23 @@ msgstr "The repeating busy block did not reflect cancelled occurrences at the ti
 #, elixir-autogen, elixir-format
 msgid "One occurrence of this repeating event was moved. The busy block still sits at its original time, and no busy block covers its new time — so that slot can be double-booked."
 msgstr "One occurrence of this repeating event was moved. The busy block still sits at its original time, and no busy block covers its new time — so that slot can be double-booked."
+
+#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#, elixir-autogen, elixir-format
+msgid "Personal commitment"
+msgstr ""
+
+#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#, elixir-autogen, elixir-format
+msgid "Placeholder title"
+msgstr ""
+
+#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#, elixir-autogen, elixir-format
+msgid "Shown as \"%{label}\""
+msgstr ""
+
+#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#, elixir-autogen, elixir-format
+msgid "Shown as busy, until a placeholder title is set"
+msgstr ""

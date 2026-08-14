@@ -103,11 +103,17 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncConflictQueries do
   link: the panel renders an organiser's links together, and asking per row is
   the n+1 the link queries' preloads already exist to avoid.
 
-  The cap is applied per link after grouping rather than in SQL. A per-link
-  `LIMIT` needs a lateral join or a window function, and what it would save is
-  not worth it here — the cap exists to bound what a socket assign holds, not
-  what Postgres reads, and the rows are already narrowed to one organiser's
-  links by the ids the caller passes.
+  The cap is per link and applied in SQL, by numbering each link's rows in a
+  window partitioned on `sync_link_id` and keeping the first `limit` of each.
+  A plain `LIMIT` would be the wrong shape: it caps the result overall, so one
+  busy link could fill the whole allowance and leave a quieter one's section
+  blank on a dashboard that has divergences to show it.
+
+  The window is what the cap has to be, not merely a faster way to reach the
+  same answer. Narrowing to one organiser's links bounds nothing — retention
+  keeps 90 days, and grouping in Elixir after an unbounded `Repo.all()` loads
+  and sorts every one of those rows on every dashboard render to then discard
+  all but a handful per link.
 
   Links with no history are absent rather than present with an empty list, so a
   caller can render a section for exactly the keys it finds.
@@ -122,12 +128,27 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncConflictQueries do
   def list_for_links(sync_link_ids, opts) when is_list(sync_link_ids) do
     limit = Keyword.get(opts, :limit, @default_limit)
 
+    ranked =
+      CalendarSyncConflictSchema
+      |> where([c], c.sync_link_id in ^sync_link_ids)
+      |> select([c], %{
+        id: c.id,
+        rank:
+          over(row_number(),
+            partition_by: c.sync_link_id,
+            order_by: [desc: c.occurred_at, desc: c.id]
+          )
+      })
+
+    # Re-joined to the table rather than selecting every column through the
+    # window: the subquery carries only the ids that survive the cap, and the
+    # outer query loads whole schema structs for exactly those, so the caller
+    # still gets the rows it would have got before.
     CalendarSyncConflictSchema
-    |> where([c], c.sync_link_id in ^sync_link_ids)
+    |> join(:inner, [c], r in subquery(ranked), on: r.id == c.id and r.rank <= ^limit)
     |> order_by([c], desc: c.occurred_at, desc: c.id)
     |> Repo.all()
     |> Enum.group_by(& &1.sync_link_id)
-    |> Map.new(fn {sync_link_id, conflicts} -> {sync_link_id, Enum.take(conflicts, limit)} end)
   end
 
   @doc """

@@ -243,6 +243,36 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.MovedOccurrenceTest do
       assert [] == Repo.all(CalendarSyncConflictSchema)
     end
 
+    test "a move is not reported to a target that cannot hold a series", %{
+      user: user,
+      source: source,
+      link: google_link
+    } do
+      # Outlook has no `:recurrence` capability, so `Eligibility` refuses the
+      # recurring source before the engine is reached and this link never
+      # received a placeholder for the series at all. A row saying its
+      # placeholder sits at the wrong time describes something that was never
+      # written — and the whole point of this log is counting how often moves
+      # matter, which links that mirror no series would inflate.
+      outlook_target = insert(:calendar_integration, user: user, provider: "outlook")
+
+      outlook_link =
+        insert(:calendar_sync_link,
+          user_id: user.id,
+          source_integration_id: source.id,
+          target_integration_id: outlook_target.id
+        )
+
+      events = [
+        occurrence(source, ~U[2026-12-15 14:00:00Z], original_start_at: ~U[2026-12-15 09:00:00Z])
+      ]
+
+      :ok = Sync.post_commit_reconciliation(source, events)
+
+      assert [] == moved_rows(outlook_link)
+      assert [_reported] = moved_rows(google_link)
+    end
+
     test "a move on a source whose only link is disabled logs nothing", %{
       source: source,
       link: link

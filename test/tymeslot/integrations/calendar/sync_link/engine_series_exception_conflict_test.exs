@@ -35,6 +35,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineSeriesExceptionConflictT
   alias Tymeslot.Integrations.Calendar.CalendarSyncLinkQueries
   alias Tymeslot.Integrations.Calendar.ProviderCalendarEventSchema
   alias Tymeslot.Integrations.Calendar.SyncLink.Engine
+  alias Tymeslot.Integrations.Calendar.SyncLink.SeriesMasterCache
 
   setup :verify_on_exit!
 
@@ -108,9 +109,13 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineSeriesExceptionConflictT
 
       assert :ok == Engine.mirror(link, weekly_instance(source), user.id)
 
-      # The organiser cancels a second occurrence. Under Stage B this appended a
-      # second row as "new information"; now it is simply a second EXDATE the
-      # placeholder carries.
+      # The organiser cancels a second occurrence, and a later sweep sees it.
+      # The master cache is cleared because the two passes are separate sweeps
+      # rather than the same fan-out: within one sweep the cache is what stops a
+      # master being fetched once per link, and between them its two-minute TTL
+      # has long expired.
+      SeriesMasterCache.clear_all()
+
       expect_master([
         "RRULE:FREQ=WEEKLY;BYDAY=TU",
         "EXDATE;TZID=Europe/Tallinn:20261013T090000",

@@ -83,6 +83,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.MovedOccurrence do
 
   alias Tymeslot.Integrations.Calendar.CalendarSyncConflictQueries
   alias Tymeslot.Integrations.Calendar.CalendarSyncLinkSchema
+  alias Tymeslot.Integrations.Calendar.SyncLink.Capability
 
   @kind "occurrence_moved"
 
@@ -111,15 +112,36 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.MovedOccurrence do
   def report(_calendar_events, []), do: :ok
 
   def report(calendar_events, links) when is_list(calendar_events) and is_list(links) do
-    calendar_events
-    |> Enum.filter(&moved?/1)
-    |> Enum.group_by(&series_key/1)
-    |> Enum.each(fn {{uid, recurring_event_id}, moved} ->
-      Enum.each(links, &record(&1, uid, recurring_event_id, moved))
-    end)
+    case Enum.filter(links, &mirrors_series?/1) do
+      [] ->
+        :ok
 
-    :ok
+      series_links ->
+        calendar_events
+        |> Enum.filter(&moved?/1)
+        |> Enum.group_by(&series_key/1)
+        |> Enum.each(fn {{uid, recurring_event_id}, moved} ->
+          Enum.each(series_links, &record(&1, uid, recurring_event_id, moved))
+        end)
+
+        :ok
+    end
   end
+
+  # Only a link whose target could hold the series in the first place. A target
+  # without `:recurrence` never received a placeholder for it — `Eligibility`
+  # refuses the source before the engine is reached — so a row saying its
+  # placeholder is in the wrong place describes something that does not exist.
+  # The report is read to decide whether moves are worth correcting, and rows
+  # for links that were never affected would inflate that count with links that
+  # mirror no series at all.
+  defp mirrors_series?(%CalendarSyncLinkSchema{target_integration: %{provider: provider}}),
+    do: Capability.supports?(provider, :recurrence)
+
+  # An unloaded target cannot be asked, and answering "yes" would log against a
+  # link whose capability is unknown. Silence is the safe reading: the write
+  # path loads the association, so this is a caller that never wrote anything.
+  defp mirrors_series?(_link), do: false
 
   # A move is the marker differing from the start it was compared against —
   # never merely its presence. Google stamps `originalStartTime` on every

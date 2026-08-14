@@ -1377,11 +1377,6 @@ msgstr "Zobrazeno jako zaneprázdněn, bez podrobností"
 
 #: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
 #, elixir-autogen, elixir-format
-msgid "Shown with a generic label"
-msgstr "Zobrazeno s obecným popiskem"
-
-#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
-#, elixir-autogen, elixir-format
 msgid "Shown with the original title"
 msgstr "Zobrazeno s původním názvem"
 
@@ -1464,3 +1459,23 @@ msgstr "Opakující se blok zaneprázdnění tehdy nezohledňoval zrušené výs
 #, elixir-autogen, elixir-format
 msgid "One occurrence of this repeating event was moved. The busy block still sits at its original time, and no busy block covers its new time — so that slot can be double-booked."
 msgstr "Jeden výskyt této opakující se události byl přesunut. Blok zaneprázdnění zůstává v původním čase a nový čas nepokrývá žádný blok — tento termín tak lze rezervovat dvakrát."
+
+#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#, elixir-autogen, elixir-format
+msgid "Personal commitment"
+msgstr "Osobní závazek"
+
+#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#, elixir-autogen, elixir-format
+msgid "Placeholder title"
+msgstr "Název zástupného bloku"
+
+#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#, elixir-autogen, elixir-format
+msgid "Shown as \"%{label}\""
+msgstr "Zobrazeno jako „%{label}“"
+
+#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#, elixir-autogen, elixir-format
+msgid "Shown as busy, until a placeholder title is set"
+msgstr "Zobrazeno jako zaneprázdněn, dokud není nastaven název zástupného bloku"

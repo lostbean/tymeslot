@@ -266,7 +266,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLinkTest do
       mirror = mirror_for_link(link, source_uid: "src-1", target_uid: "mirror-uid-1")
       test_pid = self()
 
-      expect(Tymeslot.CalendarMock, :delete_event, fn uid, {integration_id, user_id} ->
+      expect(Tymeslot.CalendarMock, :delete_event, fn uid, {integration_id, user_id}, _opts ->
         # The link and its mapping row must both still exist while the provider
         # is asked: the row is what carries the uid being deleted.
         assert Repo.get(CalendarSyncMirrorSchema, mirror.id)
@@ -288,7 +288,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLinkTest do
       {:ok, link} = SyncLink.create_link(ctx.user.id, attrs(ctx))
       mirror = mirror_for_link(link, source_uid: "src-1", target_uid: "mirror-uid-1")
 
-      expect(Tymeslot.CalendarMock, :delete_event, fn _uid, _context ->
+      expect(Tymeslot.CalendarMock, :delete_event, fn _uid, _context, _opts ->
         {:error, :service_unavailable}
       end)
 

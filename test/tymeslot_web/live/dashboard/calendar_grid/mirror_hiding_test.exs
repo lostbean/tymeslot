@@ -129,6 +129,39 @@ defmodule TymeslotWeb.Dashboard.CalendarGrid.MirrorHidingTest do
       assert html =~ "Dentist"
     end
 
+    # The mirror set is loaded with the integrations, but "Refresh calendars"
+    # reloads the events on their own. A sync that lands a placeholder while
+    # the grid is open therefore draws it beside its source until something
+    # else happens to reload the integrations — which is the moment an
+    # organiser is most likely to be looking, because they just asked for it.
+    test "is hidden after a manual refresh that first discovered it", %{
+      conn: conn,
+      target: target,
+      link: link
+    } do
+      insert_event(target, "Late mirror", ~T[09:00:00], uid: "mirror-uid-5")
+      insert_event(target, "Dentist", ~T[11:00:00], uid: "real-uid-5")
+
+      {:ok, view, html} = live(conn, ~p"/dashboard/calendar")
+
+      # Nothing yet knows it is a mirror, so the grid is right to draw it.
+      assert html =~ "Late mirror"
+
+      mirror_for_link(link, source_uid: "source-uid-5", target_uid: "mirror-uid-5")
+
+      # What the header's Refresh button pushes. Driven at the component
+      # because the button renders disabled while a sync is already in flight,
+      # which is the state a freshly mounted grid over unsynced calendars is
+      # in — and the staleness that disables it is not what this test is about.
+      html =
+        view
+        |> with_target("#calendar-grid")
+        |> render_click("refresh", %{})
+
+      refute html =~ "Late mirror"
+      assert html =~ "Dentist"
+    end
+
     test "a same-uid event on a different integration is untouched", %{
       conn: conn,
       source: source,

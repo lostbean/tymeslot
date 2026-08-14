@@ -63,6 +63,7 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
   alias Tymeslot.Integrations.Calendar.SyncLink.Capability
   alias Tymeslot.Integrations.Calendar.SyncLink.ConflictHistory
   alias Tymeslot.Security.RateLimiter
+  alias TymeslotWeb.Components.CoreComponents.Forms
 
   @impl Phoenix.LiveComponent
   def mount(socket) do
@@ -199,7 +200,18 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
 
   # The changeset's first message, already the field-specific one the schema
   # writes ("is a read-only subscription and cannot receive mirrored events").
-  defp first_error(%Ecto.Changeset{errors: [{_field, {message, _opts}} | _rest]}), do: message
+  #
+  # Through `translate_error/1` rather than assigned raw, because what the
+  # changeset carries is a msgid, not a sentence: the schema stores it with
+  # `dgettext_noop/2` precisely so the lookup happens here, at render, in the
+  # reader's locale. Assigning it straight through put an English string inside
+  # an otherwise translated panel — and did it for the *stock* Ecto validators
+  # too, whose "can't be blank" has been translated in six locales all along.
+  # The whole tuple is passed on, not just the message: `%{count}` and the rest
+  # of a validator's interpolation live in the opts.
+  defp first_error(%Ecto.Changeset{errors: [{_field, error} | _rest]}),
+    do: Forms.translate_error(error)
+
   defp first_error(_changeset), do: generic_error()
 
   defp generic_error,
@@ -284,6 +296,10 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
       |> assign(:target_without_calendar_choice?, target_without_calendar_choice?(target))
       |> assign(:target_calendar_options, target_calendar_options(target))
       |> assign(:privacy_tier_options, privacy_tier_options())
+      |> assign(
+        :generic_label_tier?,
+        form_value(assigns.form_values, "privacy_tier", "busy_only") == "generic_label"
+      )
 
     ~H"""
     <div class="space-y-8">
@@ -330,7 +346,7 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
                   )}
                 </p>
                 <p class="text-token-xs text-tymeslot-500">
-                  {privacy_tier_label(link.privacy_tier)}
+                  {privacy_tier_label(link)}
                   <span :if={not link.enabled} class="ml-2 font-semibold text-amber-600">
                     {dgettext("dashboard_integrations", "Paused")}
                   </span>
@@ -461,6 +477,22 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
             options={@privacy_tier_options}
           />
 
+          <%!-- Only the tier that uses it. Rendered for the other two, the
+                field would ask for something neither writes: `busy_only` sends
+                an opaque title and `full_passthrough` copies the source's own,
+                and a label typed under either would be stored and never
+                appear. --%>
+          <.input
+            :if={@generic_label_tier?}
+            type="text"
+            name="sync_link[generic_label]"
+            id="sync-link-generic-label"
+            label={dgettext("dashboard_integrations", "Placeholder title")}
+            value={form_value(@form_values, "generic_label")}
+            maxlength="255"
+            placeholder={dgettext("dashboard_integrations", "Personal commitment")}
+          />
+
           <div class="sm:col-span-2">
             <.action_button type="submit">
               {dgettext("dashboard_integrations", "Create link")}
@@ -548,11 +580,25 @@ defmodule TymeslotWeb.Dashboard.SyncLinksSettingsComponent do
   defp conflict_resolution_label(_resolution),
     do: dgettext("dashboard_integrations", "The difference was resolved automatically.")
 
+  # What the placeholder will actually say, not what tier was picked. The
+  # generic-label row quotes the organiser's own words back at them, because
+  # "Shown with a generic label" is a description of a setting rather than of
+  # the block their colleagues will see — and while the label had no input to
+  # arrive through, it was also false: every placeholder read "Busy".
+  defp privacy_tier_label(%{privacy_tier: "generic_label", generic_label: label})
+       when is_binary(label) and label != "" do
+    dgettext("dashboard_integrations", "Shown as \"%{label}\"", label: label)
+  end
+
+  defp privacy_tier_label(%{privacy_tier: tier}), do: privacy_tier_label(tier)
+
   defp privacy_tier_label("busy_only"),
     do: dgettext("dashboard_integrations", "Shown as busy, with no detail")
 
+  # A label-less row at that tier can only predate the input, and the honest
+  # sentence is the one describing what the target calendar shows today.
   defp privacy_tier_label("generic_label"),
-    do: dgettext("dashboard_integrations", "Shown with a generic label")
+    do: dgettext("dashboard_integrations", "Shown as busy, until a placeholder title is set")
 
   defp privacy_tier_label("full_passthrough"),
     do: dgettext("dashboard_integrations", "Shown with the original title")

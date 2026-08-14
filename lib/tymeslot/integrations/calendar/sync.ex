@@ -288,7 +288,48 @@ defmodule Tymeslot.Integrations.Calendar.Sync do
       end
     end)
 
+    enqueue_mirror_withdrawals(integration, refs)
+
     :ok
+  end
+
+  # The deletion counterpart of `enqueue_mirror_write_backs/3`, and the same
+  # rule applies: enqueue only, never a provider call. A source event vanishing
+  # has to withdraw the placeholder it caused on every calendar it was mirrored
+  # to, and doing that inline would put the *target's* latency inside the
+  # *source's* sync — a target that is slow or down could then stall an inbound
+  # sync it has nothing to do with. The Oban job absorbs that instead.
+  #
+  # It lives here rather than in `post_commit_reconciliation/2` because that
+  # function is the upsert path and a deletion never reaches it: every
+  # provider's deletion route — Google's cancelled events, Outlook's delta
+  # `@removed`, CalDAV's absent uids — funnels through this one primitive, so
+  # hooking it here covers all of them rather than three call sites that have
+  # to be kept in step. It is safe to enqueue from: no caller runs this inside
+  # a `Repo.transaction`. The CalDAV reconciler, the only path that wraps its
+  # cache writes in one, deliberately calls this *after* the commit.
+  #
+  # The link lookup is one query for the whole batch, not one per ref, and is
+  # skipped entirely for a calendar that is nobody's source — which is the
+  # common case.
+  defp enqueue_mirror_withdrawals(integration, refs) do
+    case CalendarSyncLinkQueries.list_enabled_for_source(integration.id) do
+      [] ->
+        :ok
+
+      links ->
+        # Only a uid can name a placeholder: the mirror's `source_uid` is the
+        # source event's uid, and the deterministic target uid is derived from
+        # it. Outlook's delta reports some removals with no iCalUID at all, and
+        # there is nothing to withdraw by in that case — the reconcile sweep
+        # remains the backstop.
+        refs
+        |> Enum.map(&Map.get(&1, :uid))
+        |> Enum.filter(&is_binary/1)
+        |> Enum.each(fn uid ->
+          Enum.each(links, &WriteBack.enqueue(&1.id, uid, :delete))
+        end)
+    end
   end
 
   defp delete_cached_event(integration_id, _provider_event_id, uid) when is_binary(uid) do

@@ -48,15 +48,21 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncLinkQueries do
   importantly, so that "paused means no writes" is enforced at the one place the
   sync path looks for work rather than at each of the places that act on it.
 
-  No preloads. The caller enqueues jobs keyed on `id`, so loading two
-  integrations per link would fetch rows nothing reads, on a path that runs
-  after every sync of every calendar.
+  The target integration is preloaded, and only that one. The enqueue itself
+  needs nothing but `id`, but it is no longer the only consumer of this list:
+  `SyncLink.MovedOccurrence` asks each link's target whether it can hold a
+  series at all, and a link whose target is `NotLoaded` cannot be asked and is
+  skipped — silently reporting nothing rather than reporting wrongly. One
+  preload on a list already loaded once per sync is cheaper than the query per
+  link the alternative costs. The source is deliberately left off: it is the
+  integration the caller already holds.
   """
   @spec list_enabled_for_source(integer()) :: [CalendarSyncLinkSchema.t()]
   def list_enabled_for_source(source_integration_id) when is_integer(source_integration_id) do
     CalendarSyncLinkSchema
     |> where([l], l.source_integration_id == ^source_integration_id and l.enabled == true)
     |> order_by([l], asc: l.id)
+    |> preload(:target_integration)
     |> Repo.all()
   end
 

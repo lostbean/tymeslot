@@ -96,9 +96,33 @@ defmodule Tymeslot.Workers.SyncLinkWriteBackWorker do
   mirror, which is the loop this feature has to be free of.
 
   `unique` is keyed on `[:sync_link_id, :source_uid]` — not on the operation —
-  with `replace: [:args]` at the enqueue site, so an upsert followed by a delete
-  for the same event leaves one job carrying the delete rather than two racing
-  to decide whether the placeholder survives.
+  and the enqueue site replaces the args of a job that has not started, so an
+  upsert followed by a delete for the same event leaves one job carrying the
+  delete rather than two racing to decide whether the placeholder survives.
+
+  The uniqueness window is Oban's `:incomplete` group, which includes
+  `:executing`, and the replace at the enqueue site names only the states where
+  a job has *not* started. That pairing is deliberate, and the reasoning is
+  worth keeping because both halves look wrong alone.
+
+  A bare `replace: [:args]` expands across every state — `Oban.Job.put_replace/3`
+  maps the fields over `states()` — so it rewrites a running job's args after
+  `perform/1` has already read them. The write that arrives is then neither
+  deferred nor applied; it is lost. Naming the pending states instead leaves the
+  running job alone.
+
+  Dropping `:executing` from uniqueness so the new write becomes its own job
+  looks like the better fix and is not: Oban warns that an incomplete window
+  missing `:executing` breaks uniqueness, and it is right — two jobs for one
+  event could then run concurrently, racing to decide whether the placeholder
+  survives, which is the thing uniqueness is here to prevent.
+
+  What remains is a write raised while another is executing being dropped rather
+  than deferred. That is a latency cost and not a lasting one:
+  `SyncLinkReconcileWorker` re-derives the same decision from the mapping rows
+  and the cache, so a delete lost this way is re-enqueued on the next sweep. A
+  placeholder outliving its event by one sweep is the accepted trade against two
+  writers on one placeholder.
   """
   use Oban.Worker,
     queue: :calendar_events,
