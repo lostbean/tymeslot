@@ -158,11 +158,117 @@ defmodule Tymeslot.Workers.SyncLinkWriteBackWorkerTest do
                perform_job(SyncLinkWriteBackWorker, args(reverse, mirror_uid, "upsert"))
     end
 
-    test "a recurring source is refused", %{source: source, link: link} do
-      cached_event(source, recurrence_rule: "FREQ=WEEKLY;COUNT=4")
+    test "a recurring source is refused when the target cannot expand a series", %{
+      user: user,
+      source: source
+    } do
+      outlook_target = insert(:calendar_integration, user: user, provider: "outlook")
+
+      link =
+        insert(:calendar_sync_link,
+          user_id: user.id,
+          source_integration_id: source.id,
+          target_integration_id: outlook_target.id
+        )
+
+      cached_event(source,
+        recurrence_rule: "RRULE:FREQ=WEEKLY;COUNT=4",
+        recurring_event_id: "master_abc123"
+      )
+
+      # No provider expectation of any kind, and that is the assertion: the
+      # refusal must come before the master fetch as well as before the write.
+      # Paying for a Google request to discover that Outlook cannot take the
+      # answer would be a round trip per recurring event per sync, for nothing.
+      assert {:discard, :not_an_eligible_source} ==
+               perform_job(SyncLinkWriteBackWorker, args(link, "source-uid-1", "upsert"))
+    end
+
+    test "and for a CalDAV target", %{user: user, source: source} do
+      caldav_target = insert(:calendar_integration, user: user, provider: "nextcloud")
+
+      link =
+        insert(:calendar_sync_link,
+          user_id: user.id,
+          source_integration_id: source.id,
+          target_integration_id: caldav_target.id
+        )
+
+      cached_event(source,
+        recurrence_rule: "RRULE:FREQ=WEEKLY;COUNT=4",
+        recurring_event_id: "master_abc123"
+      )
 
       assert {:discard, :not_an_eligible_source} ==
                perform_job(SyncLinkWriteBackWorker, args(link, "source-uid-1", "upsert"))
+    end
+
+    test "a recurring source IS mirrored when the target expands a series", %{
+      source: source,
+      link: link
+    } do
+      cached_event(source,
+        recurrence_rule: "RRULE:FREQ=WEEKLY;COUNT=4",
+        recurring_event_id: "master_abc123"
+      )
+
+      expect(GoogleCalendarAPIMock, :get_event, fn _integration, _calendar_id, event_id ->
+        assert event_id == "master_abc123"
+        {:ok, %{"recurrence" => ["RRULE:FREQ=WEEKLY;COUNT=52"]}}
+      end)
+
+      test_pid = self()
+
+      expect(Tymeslot.CalendarMock, :create_event, fn event_data, _context ->
+        send(test_pid, {:payload, event_data})
+        {:ok, %{provider_event_id: "target-pid-1"}}
+      end)
+
+      assert :ok == perform_job(SyncLinkWriteBackWorker, args(link, "source-uid-1", "upsert"))
+
+      assert_received {:payload, payload}
+      assert payload.recurrence_rule == "RRULE:FREQ=WEEKLY;COUNT=52"
+
+      assert {:ok, _mirror} =
+               CalendarSyncMirrorQueries.get_by_link_and_source_uid(link.id, "source-uid-1")
+    end
+
+    # The withdrawal half of the enqueue-then-refuse routing. A source that has
+    # become recurring on a link whose target cannot take one leaves a
+    # placeholder describing a single occurrence, which must come down rather
+    # than sit there blocking a slot the organiser now recurs through. This is
+    # why the worker routes the refusal through `unmirror_or_discard/4` instead
+    # of discarding outright.
+    test "a source that became recurring has its stale placeholder withdrawn", %{
+      user: user,
+      source: source
+    } do
+      outlook_target = insert(:calendar_integration, user: user, provider: "outlook")
+
+      link =
+        insert(:calendar_sync_link,
+          user_id: user.id,
+          source_integration_id: source.id,
+          target_integration_id: outlook_target.id
+        )
+
+      cached_event(source,
+        recurrence_rule: "RRULE:FREQ=WEEKLY;COUNT=4",
+        recurring_event_id: "master_abc123"
+      )
+
+      target_uid = Engine.target_uid_for(link.id, "source-uid-1")
+      mirror_for_link(link, source_uid: "source-uid-1", target_uid: target_uid)
+
+      expect(Tymeslot.CalendarMock, :delete_event, fn uid, _context ->
+        assert uid == target_uid
+        :ok
+      end)
+
+      assert :ok == perform_job(SyncLinkWriteBackWorker, args(link, "source-uid-1", "upsert"))
+
+      assert {:error, :not_found} ==
+               CalendarSyncMirrorQueries.get_by_link_and_source_uid(link.id, "source-uid-1")
     end
 
     test "a source that turned transparent has its placeholder withdrawn", %{

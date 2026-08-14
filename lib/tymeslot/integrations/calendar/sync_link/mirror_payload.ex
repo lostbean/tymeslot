@@ -58,11 +58,36 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.MirrorPayload do
   - `transparency` of `transparent` produces no mirror at all — but that
     decision is *not* made here, because a payload builder can only answer
     "what would this look like", never "should this exist". It belongs to
-    `SyncLink.Eligibility.mirror_source?/2`, which already refuses transparent
+    `SyncLink.Eligibility.mirror_source?/3`, which already refuses transparent
     events, and to the write-back worker, which withdraws a placeholder whose
     source has stopped being eligible rather than discarding the job. Repeating
     the rule here would give it two homes that can disagree, and the one here
     would be the one nobody remembers to update.
+
+  ## Why the recurrence rule arrives as an option
+
+  A recurring source is mirrored as one recurring placeholder the target expands
+  itself, so the payload has to carry an RRULE — and the one field it must *not*
+  read for that is the source's own `recurrence_rule`.
+
+  Under `singleEvents=true` the cached row for a series is an expanded instance,
+  and `upsert_batch/1` keeps the last of them. Its rule is whatever that final
+  occurrence carried, and its times are the final occurrence's times. Building
+  from it produces one busy block in December for a series that has been running
+  since March. The trustworthy rule comes from the series master, which
+  `SyncLink.RecurringSeries` fetches, and it reaches this module as an option
+  because a payload builder cannot make a provider call — it answers "what would
+  this look like", and fetching would make it answer "what is true right now",
+  which is the engine's question.
+
+  Reading `source.recurrence_rule` here would be a one-word change that silently
+  reintroduces the bug, which is exactly why the field this module reads is not
+  that one.
+
+  The rule does not vary by tier. A series is a property of the *timing*, like
+  the start and the opacity, and every tier mirrors the timing faithfully — a
+  `busy_only` placeholder that blocked one Tuesday instead of all of them would
+  be wrong rather than private.
 
   ## Why the all-day branch exists
 
@@ -117,6 +142,14 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.MirrorPayload do
   @typedoc "The privacy tiers `CalendarSyncLinkSchema` validates against."
   @type tier :: String.t()
 
+  @typedoc """
+  `:recurrence_rule` is the series master's RRULE, supplied by the caller rather
+  than read off the source — see the moduledoc for why the source's own is not
+  trustworthy. Absent or `nil` builds a one-off placeholder, which is what every
+  non-recurring source wants.
+  """
+  @type opts :: [recurrence_rule: String.t() | nil]
+
   @doc """
   The `busy_only` payload for one source event, addressed to `target_uid`.
 
@@ -152,8 +185,9 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.MirrorPayload do
   Timing, opacity and the target UID are identical at every tier. Only the
   content differs, and no tier carries attendees or conferencing details.
   """
-  @spec build(source(), String.t(), CalendarSyncLinkSchema.t()) :: map()
-  def build(source, target_uid, %CalendarSyncLinkSchema{} = link) when is_binary(target_uid) do
+  @spec build(source(), String.t(), CalendarSyncLinkSchema.t(), opts()) :: map()
+  def build(source, target_uid, %CalendarSyncLinkSchema{} = link, opts \\ [])
+      when is_binary(target_uid) and is_list(opts) do
     %{
       uid: target_uid,
       transparency: :opaque,
@@ -162,6 +196,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.MirrorPayload do
     |> Map.merge(content(source, effective_tier(source, link), link.generic_label))
     |> Map.merge(timing(source))
     |> Map.put(:timezone, Map.get(source, :timezone))
+    |> put_present(:recurrence_rule, Keyword.get(opts, :recurrence_rule))
   end
 
   @doc "The title every `busy_only` placeholder carries."

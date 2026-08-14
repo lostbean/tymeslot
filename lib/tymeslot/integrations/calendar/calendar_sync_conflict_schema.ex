@@ -1,8 +1,21 @@
 defmodule Tymeslot.Integrations.Calendar.CalendarSyncConflictSchema do
   @moduledoc """
   One recorded resolution of a mirror divergence: both sides changed, the
-  mirror was edited on the host, a delete raced an update, or the write failed
-  outright.
+  mirror was edited on the host, a delete raced an update, the write failed
+  outright, or a mirrored series carries exceptions the placeholder does not
+  reflect.
+
+  `series_exceptions` is the odd one, and deliberately kept here rather than
+  given a log of its own. Nothing raced and nothing was overwritten — the write
+  succeeded — so it is not a conflict in the sense the other four are. What it
+  shares with them is the property that decides where it belongs: a resolution
+  the engine chose, which destroyed or omitted something the organiser might
+  reasonably have expected, and which the very next successful sync erases every
+  other trace of. A recurring source with two cancelled occurrences is mirrored
+  from its rule alone, so the placeholder blocks two slots that are actually
+  free, and the mirror row records none of that. A second table for one kind
+  would mean two histories to read before answering "why does my calendar look
+  like this".
 
   Append-only, and separate from the mirror row on purpose. A mirror holds
   current state and is overwritten on every successful write, so a conflict
@@ -26,7 +39,7 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncConflictSchema do
 
   alias Tymeslot.Integrations.Calendar.CalendarSyncLinkSchema
 
-  @kinds ~w(both_changed mirror_edited delete_race write_failed)
+  @kinds ~w(both_changed mirror_edited delete_race write_failed series_exceptions)
   @resolutions ~w(source_won deletion_won skipped)
 
   @type t :: %__MODULE__{

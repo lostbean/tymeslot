@@ -227,13 +227,30 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.SyncHookTest do
   end
 
   describe "post_commit_reconciliation/2 skips ineligible sources" do
-    test "a recurring event enqueues nothing", %{source: source} do
+    # Recurrence is the one scoping rule this gate cannot apply, and the reason
+    # is structural rather than a relaxation: whether a recurring source may be
+    # mirrored depends on the *target*, and this filter runs once for a batch
+    # shared across every link out of the calendar. So the job is enqueued for
+    # each link and the worker — which holds one link and can ask its target —
+    # decides. A Google target mirrors the series; an Outlook one discards, or
+    # withdraws a placeholder that has gone stale.
+    test "a recurring event enqueues: only the worker knows the link's target", %{
+      source: source,
+      link: link
+    } do
       :ok =
         Sync.post_commit_reconciliation(source, [
           event(source, %{recurrence_rule: "FREQ=WEEKLY;COUNT=4"})
         ])
 
-      refute_enqueued(worker: SyncLinkWriteBackWorker)
+      assert_enqueued(
+        worker: SyncLinkWriteBackWorker,
+        args: %{
+          "sync_link_id" => link.id,
+          "source_uid" => "source-uid-1",
+          "operation" => "upsert"
+        }
+      )
     end
 
     # An event that stops blocking time is not the same as one that was never

@@ -36,6 +36,39 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncConflictQueries do
   end
 
   @doc """
+  The most recent conflict of one kind for one source on one link.
+
+  Exists for the kinds whose condition *persists* rather than describing a
+  moment — `series_exceptions`, today. Those would otherwise append a row every
+  time the calendar synced, for a divergence the organiser was already told
+  about, so the caller compares what it is about to record against what it last
+  recorded. `{:error, :not_found}` means nothing of that kind has been recorded
+  for this source, which the caller reads as "report it".
+
+  Scoped to `source_uid` as well as the link, because the question is always
+  about one event's history: another event's exceptions say nothing about this
+  one's.
+  """
+  @spec last_of_kind(integer(), String.t(), String.t()) ::
+          {:ok, CalendarSyncConflictSchema.t()} | {:error, :not_found}
+  def last_of_kind(sync_link_id, source_uid, kind)
+      when is_integer(sync_link_id) and is_binary(source_uid) and is_binary(kind) do
+    latest =
+      CalendarSyncConflictSchema
+      |> where([c], c.sync_link_id == ^sync_link_id)
+      |> where([c], c.source_uid == ^source_uid)
+      |> where([c], c.kind == ^kind)
+      |> order_by([c], desc: c.occurred_at, desc: c.id)
+      |> limit(1)
+      |> Repo.one()
+
+    case latest do
+      nil -> {:error, :not_found}
+      conflict -> {:ok, conflict}
+    end
+  end
+
+  @doc """
   One link's conflict history, newest first.
 
   Ordered and capped rather than returned whole: the dashboard shows a recent

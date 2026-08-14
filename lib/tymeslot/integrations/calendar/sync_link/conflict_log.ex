@@ -106,6 +106,84 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.ConflictLog do
   end
 
   @doc """
+  Records a mirrored series whose master carries exceptions the placeholder does
+  not reflect.
+
+  Unlike every other kind here, this is not a race and nothing was overwritten:
+  the write succeeded and is correct as far as it goes. What it records is a
+  *known incompleteness* — a series with two cancelled occurrences is mirrored
+  from its rule alone, so the placeholder blocks two slots the source has
+  already freed.
+
+  It is recorded rather than resolved because the alternatives are worse. Not
+  mirroring the series at all leaves every occurrence bookable, which is the
+  double-booking this feature exists to prevent; applying the EXDATEs means
+  either patching the placeholder's exception set or writing per-instance
+  overrides, and both are the next stage's work. An organiser reading "this
+  series has exceptions the busy block does not reflect" can look, which is the
+  whole difference between a known gap and a quietly wrong block.
+
+  `skipped` is the resolution because nothing won: the exceptions were not
+  applied, and the source did not overwrite anything to leave them out.
+
+  ## Why the same exception set is only recorded once
+
+  This is the one kind whose condition *persists*. The other four describe a
+  moment — an edit that raced a write, a delete that raced an edit — and the
+  write that follows resolves it, which is why each consumes the baseline it was
+  read from. A series' exceptions are not a moment: they sit on the master and
+  are still there on the next sync, and the one after that. Appending on every
+  pass would put a row in the organiser's history every time their calendar
+  synced, for a divergence they were already told about — the "history that is
+  mostly noise" this module's moduledoc exists to avoid, arrived at from the
+  other direction.
+
+  So the last recorded set for this `{link, source}` is compared, and an
+  identical one appends nothing. A *changed* set is new information — an
+  occurrence cancelled since the last pass — and is recorded. The comparison is
+  against the stored detail rather than a flag on the mirror row, because the
+  mirror row is overwritten on every write and a flag on it would be erased by
+  the very sync that needed to read it.
+  """
+  @spec record_series_exceptions(integer(), String.t(), [String.t()]) :: :ok
+  def record_series_exceptions(sync_link_id, source_uid, exceptions)
+      when is_integer(sync_link_id) and is_binary(source_uid) and is_list(exceptions) do
+    if already_recorded?(sync_link_id, source_uid, exceptions) do
+      :ok
+    else
+      append_attrs(
+        %{
+          sync_link_id: sync_link_id,
+          source_uid: source_uid,
+          kind: "series_exceptions",
+          resolution: "skipped",
+          detail: %{
+            "exception_count" => length(exceptions),
+            "exceptions" => exceptions
+          }
+        },
+        sync_link_id,
+        source_uid
+      )
+    end
+  end
+
+  # Scoped to this source's own history, so one series' exceptions never
+  # suppress another's. Absence of a previous row means this set has not been
+  # reported, which is the direction that errs towards telling the organiser
+  # something twice rather than never.
+  defp already_recorded?(sync_link_id, source_uid, exceptions) do
+    case CalendarSyncConflictQueries.last_of_kind(
+           sync_link_id,
+           source_uid,
+           "series_exceptions"
+         ) do
+      {:ok, %{detail: %{"exceptions" => previous}}} -> previous == exceptions
+      _no_previous_record -> false
+    end
+  end
+
+  @doc """
   Records a provider write that has run out of attempts.
 
   Only the last attempt writes a row. An error Oban will retry is not a

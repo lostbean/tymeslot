@@ -1454,3 +1454,8 @@ msgstr "Byla zachována původní událost."
 #, elixir-autogen, elixir-format
 msgid "The two calendars differed."
 msgstr "Oba kalendáře se lišily."
+
+#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#, elixir-autogen, elixir-format
+msgid "The repeating busy block does not reflect cancelled or moved occurrences."
+msgstr "Opakující se blok zaneprázdnění nezohledňuje zrušené nebo přesunuté výskyty."

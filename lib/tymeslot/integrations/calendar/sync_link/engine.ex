@@ -118,6 +118,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
   alias Tymeslot.Integrations.Calendar.SyncLink.Capability
   alias Tymeslot.Integrations.Calendar.SyncLink.ConflictLog
   alias Tymeslot.Integrations.Calendar.SyncLink.MirrorPayload
+  alias Tymeslot.Integrations.Calendar.SyncLink.RecurringSeries
 
   @uid_prefix "tymeslot-mirror-"
 
@@ -144,7 +145,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
   event against three provider APIs would cost a round trip per event on every
   sync.
 
-  Eligibility is *not* re-checked here. `Eligibility.mirror_source?/2` is the
+  Eligibility is *not* re-checked here. `Eligibility.mirror_source?/3` is the
   single gate and every caller passes through it first; repeating the check with
   a mirror set this module would have to fetch itself would make it two gates
   that can disagree.
@@ -156,14 +157,76 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
     target_uid = target_uid_for(link.id, source_uid)
     final? = final_attempt?(opts)
 
-    case CalendarSyncMirrorQueries.get_by_link_and_source_uid(link.id, source_uid) do
-      {:ok, mirror} ->
-        update_mirror(link, mirror, source_event, target_uid, user_id, final?)
+    case resolve_series(link, source_event) do
+      {:ok, series_opts} ->
+        write(link, source_event, source_uid, target_uid, user_id, final?, series_opts)
 
-      {:error, :not_found} ->
-        create_mirror(link, source_event, target_uid, user_id, final?)
+      {:discard, reason} ->
+        {:discard, reason}
     end
   end
+
+  defp write(link, source_event, source_uid, target_uid, user_id, final?, series_opts) do
+    case CalendarSyncMirrorQueries.get_by_link_and_source_uid(link.id, source_uid) do
+      {:ok, mirror} ->
+        update_mirror(link, mirror, source_event, target_uid, user_id, final?, series_opts)
+
+      {:error, :not_found} ->
+        create_mirror(link, source_event, target_uid, user_id, final?, series_opts)
+    end
+  end
+
+  # --- The series master ---
+  #
+  # A recurring source is mirrored from the *series master's* rule, never from
+  # the cached row's — see `SyncLink.RecurringSeries` for why the row's rule
+  # describes only the last occurrence. The master is fetched here rather than
+  # in the payload builder because it is a provider call, and once per
+  # `mirror/4` rather than per occurrence: the series is one cache row, so one
+  # change is one fetch however many times it recurs.
+  #
+  # A master that cannot be described is a `:discard`, not an `:error`. Retrying
+  # would re-fetch the same absent master and reach the same answer, and the
+  # reconcile sweep already looks for exactly the mirrors that are missing —
+  # so the retry ladder would spend five attempts to arrive where the sweep
+  # starts. A transient failure is therefore *deliberately* discarded too: the
+  # sweep is the retry, and the alternative to waiting for it is writing a block
+  # at the wrong date.
+  defp resolve_series(link, source_event) do
+    case RecurringSeries.resolve(source_event, link.source_integration) do
+      :not_recurring ->
+        {:ok, []}
+
+      {:ok, series} ->
+        {:ok, [recurrence_rule: series.recurrence_rule, exceptions: series.exceptions]}
+
+      {:skip, reason} ->
+        Logger.info("Skipping the mirror for a series whose master could not be read",
+          sync_link_id: link.id,
+          source_uid: source_event.uid,
+          reason: inspect(reason)
+        )
+
+        {:discard, :series_master_unavailable}
+    end
+  end
+
+  # The exceptions the placeholder does not reflect, recorded so the organiser
+  # sees a known gap rather than a quietly wrong block. Called only after the
+  # write has landed, for the same reason `record_overwrite/2` is: a conflict is
+  # a resolution, and a write that failed resolved nothing — recording before
+  # the call would append a row per retry for a divergence still outstanding,
+  # and the retry that finally succeeded would append one more.
+  defp note_series_exceptions(:ok, link, source_uid, series_opts) do
+    case Keyword.get(series_opts, :exceptions, []) do
+      [] -> :ok
+      exceptions -> ConflictLog.record_series_exceptions(link.id, source_uid, exceptions)
+    end
+
+    :ok
+  end
+
+  defp note_series_exceptions(result, _link, _source_uid, _series_opts), do: result
 
   @doc """
   Withdraws the placeholder for a source event that is gone, or that has stopped
@@ -207,13 +270,16 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
 
   # --- Create ---
 
-  defp create_mirror(link, source_event, target_uid, user_id, final?) do
-    payload = payload_for(link, source_event, target_uid)
+  defp create_mirror(link, source_event, target_uid, user_id, final?, series_opts) do
+    payload = payload_for(link, source_event, target_uid, series_opts)
 
     case CalendarEvents.create_event(payload, {link.target_integration_id, user_id}) do
       {:ok, created} ->
         result = persist_or_compensate(link, source_event, target_uid, created, user_id)
-        paint(result, link, target_uid, provider_event_id(created), user_id)
+
+        result
+        |> paint(link, target_uid, provider_event_id(created), user_id)
+        |> note_series_exceptions(link, source_event.uid, series_opts)
 
       {:error, reason} ->
         record_write_failure(link, source_event.uid, :create, reason, final?)
@@ -279,8 +345,8 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
 
   # --- Update ---
 
-  defp update_mirror(link, mirror, source_event, target_uid, user_id, final?) do
-    payload = payload_for(link, source_event, target_uid)
+  defp update_mirror(link, mirror, source_event, target_uid, user_id, final?, series_opts) do
+    payload = payload_for(link, source_event, target_uid, series_opts)
 
     case CalendarEvents.update_event(target_uid, payload, {link.target_integration_id, user_id}) do
       :ok ->
@@ -301,7 +367,9 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
           source_etag: Map.get(source_event, :etag)
         })
 
-        paint(:ok, link, target_uid, mirror.target_provider_event_id, user_id)
+        :ok
+        |> paint(link, target_uid, mirror.target_provider_event_id, user_id)
+        |> note_series_exceptions(link, source_event.uid, series_opts)
 
       {:error, reason} ->
         # The placeholder on the target is now out of step with its source, and
@@ -505,8 +573,11 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
   # always writes to the primary path — which is why the schema clears
   # `target_calendar_id` for a CalDAV target rather than storing a preference
   # the write cannot honour.
-  defp payload_for(link, source_event, target_uid) do
-    payload = MirrorPayload.build(source_event, target_uid, link)
+  defp payload_for(link, source_event, target_uid, series_opts) do
+    payload =
+      MirrorPayload.build(source_event, target_uid, link,
+        recurrence_rule: Keyword.get(series_opts, :recurrence_rule)
+      )
 
     case link.target_calendar_id do
       nil -> payload

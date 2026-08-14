@@ -1446,3 +1446,8 @@ msgstr ""
 #, elixir-autogen, elixir-format
 msgid "The two calendars differed."
 msgstr ""
+
+#: lib/tymeslot_web/live/dashboard/sync_links_settings_component.ex
+#, elixir-autogen, elixir-format
+msgid "The repeating busy block does not reflect cancelled or moved occurrences."
+msgstr ""

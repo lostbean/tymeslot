@@ -172,11 +172,20 @@ defmodule Tymeslot.Workers.SyncLinkReconcileWorker do
 
     sources =
       events
-      |> Enum.filter(&Eligibility.mirror_source?(&1, mirrors))
+      |> Enum.filter(&Eligibility.mirror_source?(&1, mirrors, target_provider(link)))
       |> Map.new(&{&1.uid, &1})
 
     {MapSet.new(events, & &1.uid), sources}
   end
+
+  # Named for `Eligibility`, which needs it for one decision: whether a
+  # recurring source may be mirrored onto this link's target. Preloaded by
+  # `CalendarSyncLinkQueries.get/1`. A link whose association could not be
+  # loaded yields `nil`, which `Capability` treats as an unrecognised provider
+  # and so refuses a series — the same direction the write-back worker takes,
+  # and the one that leaves a wrong placeholder off the calendar.
+  defp target_provider(%{target_integration: %{provider: provider}}), do: provider
+  defp target_provider(_link), do: nil
 
   defp enqueue_missing_and_stale(link, sources, mappings) do
     by_uid = Map.new(mappings, &{&1.source_uid, &1})
