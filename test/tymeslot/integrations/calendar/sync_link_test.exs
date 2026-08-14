@@ -18,8 +18,8 @@ defmodule Tymeslot.Integrations.Calendar.SyncLinkTest do
   import Ecto.Query, only: [from: 2]
   import Tymeslot.Factory
 
-  alias Tymeslot.Integrations.Calendar.CalendarSyncMirrorSchema
   alias Tymeslot.Integrations.Calendar.CalendarSyncLinkSchema
+  alias Tymeslot.Integrations.Calendar.CalendarSyncMirrorSchema
   alias Tymeslot.Integrations.Calendar.SyncLink
   alias Tymeslot.Repo
 
@@ -236,8 +236,8 @@ defmodule Tymeslot.Integrations.Calendar.SyncLinkTest do
       # control an organiser reaches for precisely when a link is misbehaving.
       {:ok, link} = SyncLink.create_link(ctx.user.id, attrs(ctx))
 
-      {1, _} =
-        Tymeslot.Repo.update_all(
+      {1, _no_returning} =
+        Repo.update_all(
           from(l in CalendarSyncLinkSchema, where: l.id == ^link.id),
           set: [privacy_tier: "generic_label", generic_label: nil]
         )
