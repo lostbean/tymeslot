@@ -252,6 +252,42 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
 
         paint(result, link, target_uid, provider_event_id(created), user_id)
 
+      # The identifier is already taken, and it is taken by a placeholder of
+      # ours: Google reserves a deleted event's id, so a mirror that was
+      # withdrawn and is being rewritten under the same deterministic id
+      # collides with its own tombstone. No number of retries frees it, and
+      # the event the id names is exactly the one this write wants to exist —
+      # so the write becomes an update. The same create→update fallback the
+      # booking path in `Meetings.CalendarEventSync` has always had.
+      {:error, :already_exists} ->
+        adopt_existing_placeholder(link, source_event, target_uid, user_id, final?, series_opts)
+
+      {:error, reason} ->
+        record_write_failure(link, source_event.uid, :create, reason, final?)
+        {:error, reason}
+    end
+  end
+
+  defp adopt_existing_placeholder(link, source_event, target_uid, user_id, final?, series_opts) do
+    payload = payload_for(link, source_event, target_uid, series_opts)
+
+    case CalendarEvents.update_event(
+           target_uid,
+           payload,
+           {link.target_integration_id, user_id}
+         ) do
+      # `update_event/3` narrows its result to a bare `:ok` and discards the
+      # provider's response, so there is no returned id to record here. The
+      # tombstone that caused the 409 was created under `target_uid` and the
+      # provider resolves that to the event just updated, so it is the handle —
+      # the same one `delete_event/3` is given when the placeholder is
+      # eventually withdrawn.
+      :ok ->
+        result =
+          persist_or_compensate(link, source_event, target_uid, %{uid: target_uid}, user_id)
+
+        paint(result, link, target_uid, target_uid, user_id)
+
       {:error, reason} ->
         record_write_failure(link, source_event.uid, :create, reason, final?)
         {:error, reason}
