@@ -32,11 +32,16 @@ defmodule Tymeslot.Workers.SyncLinkWriteBackWorkerTest do
   alias Tymeslot.Integrations.Calendar.ProviderCalendarEventQueries
   alias Tymeslot.Integrations.Calendar.SyncLink.Engine
   alias Tymeslot.Integrations.Calendar.SyncLink.WriteBack
+  alias Tymeslot.Security.RateLimiter
   alias Tymeslot.Workers.SyncLinkWriteBackWorker
 
   setup :verify_on_exit!
 
   setup do
+    # The write budget is a process-independent ETS bucket and leaks between
+    # tests: without this, a test that spends it fails the next one for a
+    # reason that has nothing to do with what it asserts.
+    RateLimiter.clear_all()
     linked_pair()
   end
 
@@ -88,11 +93,92 @@ defmodule Tymeslot.Workers.SyncLinkWriteBackWorkerTest do
       cached_event(source)
 
       expect(Tymeslot.CalendarMock, :create_event, fn _data, _context ->
+        {:error, :network_error}
+      end)
+
+      assert {:error, :network_error} ==
+               perform_job(SyncLinkWriteBackWorker, args(link, "source-uid-1", "upsert"))
+    end
+
+    # A rate limit is not this job's failure. It says the *account* is over
+    # quota, which every other job writing to the same calendar is about to
+    # discover too, and burning an attempt on it means a backlog of fifty
+    # mirrors exhausts five attempts each and discards them all — for a
+    # condition that clears in a minute.
+    #
+    # A snooze reschedules without consuming an attempt, so the write survives
+    # a burst however long the burst lasts.
+    test "a rate limit snoozes rather than spending an attempt", %{source: source, link: link} do
+      cached_event(source)
+
+      expect(Tymeslot.CalendarMock, :create_event, fn _data, _context ->
         {:error, :rate_limited}
       end)
 
-      assert {:error, :rate_limited} ==
+      assert {:snooze, seconds} =
                perform_job(SyncLinkWriteBackWorker, args(link, "source-uid-1", "upsert"))
+
+      assert seconds >= 60, "a snooze shorter than the quota window just re-hits it"
+    end
+
+    # The snooze above is reactive: the burst still reaches Google and is still
+    # refused, it just survives the refusal. This is the proactive half — the
+    # write is not attempted at all once the target account's own budget for
+    # the second is spent, so the burst never leaves the machine.
+    #
+    # Keyed on the target integration because the quota Google enforces is
+    # per-account: two organisers mirroring at once must not share a budget,
+    # and two links onto the same calendar must.
+    test "stops writing once the target account's budget for the second is spent", ctx do
+      %{source: source, link: link} = ctx
+
+      # The budget is what bounds the provider calls, so the mock is told to
+      # accept any number: the assertion is that far fewer than twelve arrive.
+      stub(Tymeslot.CalendarMock, :create_event, fn _data, _context ->
+        {:ok, %{provider_event_id: "target-pid"}}
+      end)
+
+      outcomes =
+        for n <- 1..12 do
+          cached_event(source, uid: "source-uid-#{n}", provider_event_id: "source-pid-#{n}")
+          perform_job(SyncLinkWriteBackWorker, args(link, "source-uid-#{n}", "upsert"))
+        end
+
+      written = Enum.count(outcomes, &(&1 == :ok))
+      paced = Enum.count(outcomes, &match?({:snooze, _seconds}, &1))
+
+      assert paced > 0,
+             "the budget never ran out, so nothing paced the burst: #{inspect(outcomes)}"
+
+      # Some writes must still get through — a gate that refused everything
+      # would pace the burst by never mirroring at all.
+      assert written > 0
+      assert written < 12, "all twelve reached the provider, so the budget did nothing"
+    end
+
+    # Every job in a backlog is refused at almost the same instant, so a fixed
+    # snooze would reschedule them all to the same second and rebuild the burst
+    # that caused the refusal. Spreading them is what actually drains the queue.
+    test "snoozes are spread rather than landing together", %{source: source, link: link} do
+      cached_event(source)
+
+      # Refused by the provider rather than by the local budget, so this
+      # exercises the snooze itself. `stub` because the budget decides how many
+      # calls actually get through.
+      stub(Tymeslot.CalendarMock, :create_event, fn _data, _context ->
+        {:error, :rate_limited}
+      end)
+
+      delays =
+        for _attempt <- 1..40 do
+          {:snooze, seconds} =
+            perform_job(SyncLinkWriteBackWorker, args(link, "source-uid-1", "upsert"))
+
+          seconds
+        end
+
+      assert length(Enum.uniq(delays)) > 1,
+             "every job snoozed for #{inspect(hd(delays))}s, which re-creates the burst"
     end
   end
 
