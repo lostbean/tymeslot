@@ -48,12 +48,14 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
   nothing will ever clean up. A delete that fails leaves the row behind in
   `pending_delete`, which is exactly the state the reconcile sweep looks for.
 
-  Every call the link makes — write, delete, colour patch — carries its own
-  `target_calendar_id`. A delete falling back to the integration's default
-  booking calendar asked the wrong calendar about a placeholder written to a
-  secondary one and drew a 404, which was then read as "already gone": the
-  mapping row, the only record of where the placeholder was, was dropped and
-  the block stranded. A 404 from the right calendar genuinely means gone.
+  Every call — write, delete, colour patch — names the calendar the placeholder
+  is on, because asking the wrong one draws a 404 that this module reads as
+  "already gone": the mapping row, the only record of where the placeholder was,
+  is dropped and the block stranded. A 404 from the right calendar genuinely
+  means gone. The write takes that calendar from the link; the delete takes it
+  from the *mapping row*, which recorded it at write time — a link re-pointed
+  since leaves its existing placeholders where they were, so it names only where
+  the next write would go.
 
   ## Conflicts, and why they are recorded here
 
@@ -301,6 +303,11 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
       sync_link_id: link.id,
       source_uid: source_event.uid,
       target_integration_id: link.target_integration_id,
+      # Where the placeholder actually went, captured at write time rather than
+      # re-derived from the link later: a link that is re-pointed afterwards
+      # leaves this placeholder behind on the calendar named here, and this is
+      # then the only record of it. See the schema's moduledoc.
+      target_calendar_id: link.target_calendar_id,
       target_uid: target_uid,
       target_provider_event_id: provider_event_id(created),
       target_etag: baseline_after_write(),
@@ -464,7 +471,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
     case CalendarEvents.delete_event(
            mirror.target_uid,
            {link.target_integration_id, user_id},
-           target_calendar_opts(link)
+           CalendarSyncMirrorSchema.target_calendar_opts(mirror, link)
          ) do
       :ok ->
         drop_mapping(mirror)
