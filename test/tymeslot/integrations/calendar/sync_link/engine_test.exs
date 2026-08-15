@@ -92,6 +92,42 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineTest do
       assert mirror.last_synced_at
     end
 
+    # The shape every other mock in this file returns — `%{provider_event_id:
+    # ...}` — is one the OAuth providers never produce. `create_event` pipes
+    # the provider's response through `convert_event/1`, which lands the id in
+    # `uid:` and offers no `provider_event_id` at all, so the extractor matched
+    # nothing and stored `nil`.
+    #
+    # On a live installation that meant all 420 mirror rows recorded no
+    # provider id while claiming to be active, which left every placeholder
+    # they named unreachable: teardown deletes by provider id, so the busy
+    # blocks could never be withdrawn by any path.
+    test "records the provider id from the shape an OAuth provider actually returns", %{
+      user: user,
+      source: source,
+      link: link
+    } do
+      expect(Tymeslot.CalendarMock, :create_event, fn _event_data, _context ->
+        # Exactly what `Google.Provider.convert_event/1` builds: the provider's
+        # own event id, under `uid`, with no `provider_event_id` key.
+        {:ok,
+         %{
+           uid: "google-assigned-event-id",
+           summary: "Busy",
+           start_time: ~U[2026-07-03 09:00:00Z],
+           end_time: ~U[2026-07-03 10:00:00Z]
+         }}
+      end)
+
+      assert :ok == Engine.mirror(link, source_event(source), user.id)
+
+      assert {:ok, mirror} =
+               CalendarSyncMirrorQueries.get_by_link_and_source_uid(link.id, "source-uid-1")
+
+      assert mirror.target_provider_event_id == "google-assigned-event-id",
+             "without this the placeholder can never be withdrawn from the provider"
+    end
+
     test "an all-day source produces a date-valued placeholder", %{
       user: user,
       source: source,

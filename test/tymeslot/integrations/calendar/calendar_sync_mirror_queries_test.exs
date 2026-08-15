@@ -53,7 +53,10 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncMirrorQueriesTest do
       mirror = mirror_for_link(link)
 
       assert CalendarSyncMirrorQueries.mirror_uids_for_integrations([link.target_integration_id]) ==
-               MapSet.new([{link.target_integration_id, mirror.target_uid}])
+               MapSet.new([
+                 {link.target_integration_id, mirror.target_uid},
+                 {link.target_integration_id, mirror.target_provider_event_id}
+               ])
     end
 
     test "is empty for an empty integration list", %{link: link} do
@@ -67,13 +70,53 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncMirrorQueriesTest do
                MapSet.new()
     end
 
+    # The set exists to answer one question — "is this cached event a
+    # placeholder we wrote?" — and it is asked with the UID the *provider*
+    # reports, not the one we asked for. Google does not keep ours: a create
+    # sends `id`, and Google answers with an iCalUID of its own making,
+    # `{id}@google.com`. The next inbound sync caches that, so the cached UID
+    # never equals the `target_uid` we stored and the placeholder reads as an
+    # ordinary event.
+    #
+    # In production every one of 317 cached placeholders was unrecognisable
+    # this way, which disabled loop prevention entirely: each placeholder
+    # became a source and was mirrored back, so one event grew a second and
+    # third "Busy" on the same calendar.
+    #
+    # So the set carries the provider's id as well as ours. Both are matched
+    # because the CalDAV family does keep the UID it is given.
+    test "also carries the id the provider gave the placeholder", %{link: link} do
+      mirror = mirror_for_link(link, target_provider_event_id: "google-assigned-id")
+
+      set = CalendarSyncMirrorQueries.mirror_uids_for_integrations([link.target_integration_id])
+
+      assert MapSet.member?(set, {link.target_integration_id, mirror.target_uid}),
+             "the uid we asked for must still match, for providers that keep it"
+
+      assert MapSet.member?(set, {link.target_integration_id, "google-assigned-id"}),
+             "a placeholder Google renamed is invisible to loop prevention without this"
+    end
+
+    test "omits a provider id that was never recorded", %{link: link} do
+      # A mirror whose write failed has no provider id yet. Adding `nil` to the
+      # set would make every event with no uid look like a placeholder.
+      mirror_for_link(link, target_provider_event_id: nil)
+
+      set = CalendarSyncMirrorQueries.mirror_uids_for_integrations([link.target_integration_id])
+
+      refute Enum.any?(set, fn {_integration_id, uid} -> is_nil(uid) end)
+    end
+
     test "does not include mirrors targeting an integration outside the list", %{link: link} do
       other_link = insert(:calendar_sync_link)
       mirror_for_link(other_link)
       mine = mirror_for_link(link)
 
       assert CalendarSyncMirrorQueries.mirror_uids_for_integrations([link.target_integration_id]) ==
-               MapSet.new([{link.target_integration_id, mine.target_uid}])
+               MapSet.new([
+                 {link.target_integration_id, mine.target_uid},
+                 {link.target_integration_id, mine.target_provider_event_id}
+               ])
     end
 
     test "covers several integrations in one query", %{link: link} do
@@ -90,7 +133,9 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncMirrorQueriesTest do
       assert result ==
                MapSet.new([
                  {link.target_integration_id, mine.target_uid},
-                 {other_link.target_integration_id, theirs.target_uid}
+                 {link.target_integration_id, mine.target_provider_event_id},
+                 {other_link.target_integration_id, theirs.target_uid},
+                 {other_link.target_integration_id, theirs.target_provider_event_id}
                ])
     end
 
@@ -98,7 +143,10 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncMirrorQueriesTest do
       mirror = mirror_for_link(link, state: "pending_delete")
 
       assert CalendarSyncMirrorQueries.mirror_uids_for_integrations([link.target_integration_id]) ==
-               MapSet.new([{link.target_integration_id, mirror.target_uid}])
+               MapSet.new([
+                 {link.target_integration_id, mirror.target_uid},
+                 {link.target_integration_id, mirror.target_provider_event_id}
+               ])
     end
   end
 

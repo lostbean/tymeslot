@@ -582,8 +582,25 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
   # — the mapping is still written, keyed on the deterministic `target_uid`,
   # which is what every subsequent update and delete addresses. The provider id
   # is recorded for diagnosis and for the reconcile sweep, not for addressing.
+  # The id the provider filed the placeholder under, which is the only handle
+  # teardown has for withdrawing it later. Four shapes because the write path
+  # crosses three layers that each describe an event differently.
+  #
+  # The `uid:` clause is the one that matters in practice and was missing.
+  # `create_event` pipes a provider's response through its `convert_event/1`,
+  # and for the OAuth families that lands the provider's own event id under
+  # `uid` with no `provider_event_id` key anywhere in the map. Falling through
+  # to `nil` there meant a mirror row recorded no provider id while claiming to
+  # be active, and a placeholder with no recorded id cannot be deleted by any
+  # path — not teardown, not the reconcile sweep. On a live installation every
+  # one of 420 rows was in that state.
+  #
+  # Ordered most specific first: an explicit `provider_event_id` always wins,
+  # because a caller that names it means it. `uid` is consulted last, since it
+  # is the id only when nothing more precise was offered.
   defp provider_event_id(%{provider_event_id: id}) when is_binary(id), do: id
   defp provider_event_id(%{"id" => id}) when is_binary(id), do: id
   defp provider_event_id(%{id: id}) when is_binary(id), do: id
+  defp provider_event_id(%{uid: id}) when is_binary(id), do: id
   defp provider_event_id(_other), do: nil
 end
