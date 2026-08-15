@@ -66,6 +66,37 @@ defmodule Tymeslot.Workers.SyncLinkWriteBackWorker do
       states: [:available, :scheduled, :executing, :retryable, :suspended]
     ]
 
+  @doc """
+  How long to wait before retrying a failed write.
+
+  Oban's default exhausts all five attempts inside about eighty seconds —
+  17s, 20s, 24s, 31s. That is well judged for a dropped connection and
+  exactly wrong for the failure this worker actually meets: a provider quota.
+  Google meters per user over a rolling minute, so four retries inside ninety
+  seconds mostly re-hit the same exhausted window, and a write is discarded
+  permanently for a condition that was temporary by definition.
+
+  It is not hypothetical. A backlog of mirrors reached Google at once, every
+  job answered "Rate Limit Exceeded", and all of them exhausted their attempts
+  and were discarded within the same minute.
+
+  So each retry clears a full quota window and the run spans about twenty
+  minutes rather than one. A discarded write is not lost — `SyncLinkReconcile`
+  re-derives it from the mapping rows within half an hour — but a placeholder
+  that arrives twenty minutes late is better than one that waits for a sweep,
+  and far better than a burst of writes that all fail together.
+  """
+  @impl Oban.Worker
+  def backoff(%Oban.Job{attempt: attempt}) do
+    case attempt do
+      1 -> 60
+      2 -> 150
+      3 -> 360
+      4 -> 720
+      _later_attempt -> 720
+    end
+  end
+
   alias Tymeslot.Integrations.Calendar.CalendarSyncLinkQueries
   alias Tymeslot.Integrations.Calendar.CalendarSyncLinkSchema
   alias Tymeslot.Integrations.Calendar.CalendarSyncMirrorQueries

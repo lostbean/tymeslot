@@ -221,6 +221,38 @@ defmodule Tymeslot.Workers.SyncLinkWriteBackWorkerTest do
     end
   end
 
+  describe "backoff/1" do
+    # Oban's default backoff exhausts all five attempts inside about eighty
+    # seconds. That suits a dropped connection and is exactly wrong for a
+    # provider quota: Google meters per user over a rolling minute, so four
+    # rapid retries mostly re-hit the same exhausted window and the write is
+    # discarded permanently for a condition that was temporary. Observed in
+    # production — a backlog of mirrors hit Google at once, every job answered
+    # "Rate Limit Exceeded", and all of them were discarded within the minute.
+    test "spreads the retries across minutes rather than seconds" do
+      delays =
+        for attempt <- 1..4, do: SyncLinkWriteBackWorker.backoff(%Oban.Job{attempt: attempt})
+
+      assert Enum.all?(delays, &(&1 >= 60)),
+             "every retry must clear a one-minute quota window, got #{inspect(delays)}"
+
+      # Strictly increasing, so a target still refusing on the third attempt is
+      # given longer than it was on the first.
+      assert delays == Enum.sort(delays)
+      assert Enum.uniq(delays) == delays
+    end
+
+    test "covers a quota window several times over before giving up" do
+      total =
+        Enum.sum(
+          for attempt <- 1..4, do: SyncLinkWriteBackWorker.backoff(%Oban.Job{attempt: attempt})
+        )
+
+      assert total >= 600,
+             "five attempts spanning #{total}s is too short to outlast a rate limit"
+    end
+  end
+
   describe "uniqueness" do
     test "a second enqueue for the same source collapses onto the pending job", %{link: link} do
       :ok = WriteBack.enqueue(link.id, "source-uid-1", :upsert)
