@@ -57,6 +57,13 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
   since leaves its existing placeholders where they were, so it names only where
   the next write would go.
 
+  ## The identifier a write files under
+
+  Which id a mapping row records is decided by `SyncLink.ProviderEventId`, not
+  here: the answer differs per provider family and per write verb, and getting
+  it wrong produces a row addressing an event no provider holds. See that
+  module.
+
   ## Conflicts, and why they are recorded here
 
   A mirror is not independently editable: whatever the organiser does to a
@@ -99,6 +106,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
   alias Tymeslot.Integrations.Calendar.SyncLink.ConflictLog
   alias Tymeslot.Integrations.Calendar.SyncLink.MirrorColour
   alias Tymeslot.Integrations.Calendar.SyncLink.MirrorPayload
+  alias Tymeslot.Integrations.Calendar.SyncLink.ProviderEventId
   alias Tymeslot.Integrations.Calendar.SyncLink.RecurringSeries
 
   @uid_prefix "tymeslot-mirror-"
@@ -278,17 +286,16 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
            payload,
            {link.target_integration_id, user_id}
          ) do
-      # `update_event/3` narrows its result to a bare `:ok` and discards the
-      # provider's response, so there is no returned id to record here. The
-      # tombstone that caused the 409 was created under `target_uid` and the
-      # provider resolves that to the event just updated, so it is the handle —
-      # the same one `delete_event/3` is given when the placeholder is
-      # eventually withdrawn.
-      :ok ->
-        result =
-          persist_or_compensate(link, source_event, target_uid, %{uid: target_uid}, user_id)
+      # Google files the event under a hash of `target_uid` and answers with it;
+      # CalDAV keeps `target_uid` and answers `:ok`. `ProviderEventId` holds the
+      # rule, so no provider-specific mapper is reached from here.
+      updated when updated == :ok or (is_tuple(updated) and elem(updated, 0) == :ok) ->
+        provider_id = ProviderEventId.for_update(updated, target_uid)
 
-        paint(result, link, target_uid, target_uid, user_id)
+        result =
+          persist_or_compensate(link, source_event, target_uid, %{uid: provider_id}, user_id)
+
+        paint(result, link, target_uid, provider_id, user_id)
 
       {:error, reason} ->
         record_write_failure(link, source_event.uid, :create, reason, final?)
@@ -629,21 +636,5 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
   # teardown has for withdrawing it later. Four shapes because the write path
   # crosses three layers that each describe an event differently.
   #
-  # The `uid:` clause is the one that matters in practice and was missing.
-  # `create_event` pipes a provider's response through its `convert_event/1`,
-  # and for the OAuth families that lands the provider's own event id under
-  # `uid` with no `provider_event_id` key anywhere in the map. Falling through
-  # to `nil` there meant a mirror row recorded no provider id while claiming to
-  # be active, and a placeholder with no recorded id cannot be deleted by any
-  # path — not teardown, not the reconcile sweep. On a live installation every
-  # one of 420 rows was in that state.
-  #
-  # Ordered most specific first: an explicit `provider_event_id` always wins,
-  # because a caller that names it means it. `uid` is consulted last, since it
-  # is the id only when nothing more precise was offered.
-  defp provider_event_id(%{provider_event_id: id}) when is_binary(id), do: id
-  defp provider_event_id(%{"id" => id}) when is_binary(id), do: id
-  defp provider_event_id(%{id: id}) when is_binary(id), do: id
-  defp provider_event_id(%{uid: id}) when is_binary(id), do: id
-  defp provider_event_id(_other), do: nil
+  defp provider_event_id(shape), do: ProviderEventId.extract(shape)
 end

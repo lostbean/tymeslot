@@ -78,7 +78,7 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncMirrorQueries do
     |> MapSet.new()
   end
 
-  # Both identities a placeholder can be cached under, because the two provider
+  # Every identity a placeholder can be cached under, because the two provider
   # families disagree about whose UID survives a write.
   #
   # The CalDAV family stores the UID it is handed, so `target_uid` comes back
@@ -96,10 +96,34 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncMirrorQueries do
   # A mirror whose write never landed has no provider id, and `nil` is dropped
   # rather than added — a set containing it would match every cached event
   # whose uid is also absent.
+  #
+  # The stored provider id is Google's bare event id, because that is what the
+  # write answered with: `convert_event/1` reads the response's `"id"`. The
+  # *cache* is filled by the normaliser, which prefers `"iCalUID"` — the same
+  # id with `@google.com` appended. So the id as recorded never equals the uid
+  # as cached, and the suffixed form has to be in the set too or the row still
+  # recognises nothing. Adding the variant here rather than at the write keeps
+  # every mapping already in the database working, including the ones written
+  # before the id was recorded correctly.
   defp identifiers_for({integration_id, target_uid, provider_event_id}) do
     [target_uid, provider_event_id]
     |> Enum.filter(&is_binary/1)
+    |> Enum.flat_map(&google_variants/1)
+    |> Enum.uniq()
     |> Enum.map(&{integration_id, &1})
+  end
+
+  # An identifier that already carries the domain is left alone; anything else
+  # gains the suffixed form alongside the bare one. Both go in because a target
+  # is Google or it is not, and the set is asked the same question either way —
+  # a CalDAV uid with `@google.com` appended matches nothing, which costs a
+  # MapSet entry and no correctness.
+  defp google_variants(identifier) do
+    if String.ends_with?(identifier, "@google.com") do
+      [identifier]
+    else
+      [identifier, identifier <> "@google.com"]
+    end
   end
 
   @doc """

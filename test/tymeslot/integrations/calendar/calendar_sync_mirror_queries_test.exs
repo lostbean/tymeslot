@@ -52,11 +52,41 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncMirrorQueriesTest do
     test "returns the target integration and UID of each mirror", %{link: link} do
       mirror = mirror_for_link(link)
 
-      assert CalendarSyncMirrorQueries.mirror_uids_for_integrations([link.target_integration_id]) ==
-               MapSet.new([
-                 {link.target_integration_id, mirror.target_uid},
-                 {link.target_integration_id, mirror.target_provider_event_id}
-               ])
+      set = CalendarSyncMirrorQueries.mirror_uids_for_integrations([link.target_integration_id])
+
+      assert MapSet.member?(set, {link.target_integration_id, mirror.target_uid})
+      assert MapSet.member?(set, {link.target_integration_id, mirror.target_provider_event_id})
+    end
+
+    # The last gap between the id as *recorded* and the uid as *cached*. The
+    # write answers with Google's bare event id (`convert_event/1` reads the
+    # response's `"id"`), while the cache is filled by the normaliser, which
+    # prefers `"iCalUID"` — the same id with `@google.com` appended. Storing
+    # only the bare form means the recorded id never equals the cached uid, so
+    # the placeholder still reads as an ordinary event even once the right id
+    # is recorded.
+    test "carries the suffixed form the cache actually holds for a Google placeholder", %{
+      link: link
+    } do
+      mirror_for_link(link, target_provider_event_id: "google-assigned-id")
+
+      set = CalendarSyncMirrorQueries.mirror_uids_for_integrations([link.target_integration_id])
+
+      assert MapSet.member?(set, {link.target_integration_id, "google-assigned-id@google.com"}),
+             "the cache stores Google's iCalUID, so the set must contain that form too"
+    end
+
+    test "does not double-suffix an identifier that already carries the domain", %{link: link} do
+      mirror_for_link(link, target_provider_event_id: "already-there@google.com")
+
+      set = CalendarSyncMirrorQueries.mirror_uids_for_integrations([link.target_integration_id])
+
+      assert MapSet.member?(set, {link.target_integration_id, "already-there@google.com"})
+
+      refute MapSet.member?(
+               set,
+               {link.target_integration_id, "already-there@google.com@google.com"}
+             )
     end
 
     test "is empty for an empty integration list", %{link: link} do
@@ -109,14 +139,22 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncMirrorQueriesTest do
 
     test "does not include mirrors targeting an integration outside the list", %{link: link} do
       other_link = insert(:calendar_sync_link)
-      mirror_for_link(other_link)
+      theirs = mirror_for_link(other_link)
       mine = mirror_for_link(link)
 
-      assert CalendarSyncMirrorQueries.mirror_uids_for_integrations([link.target_integration_id]) ==
-               MapSet.new([
-                 {link.target_integration_id, mine.target_uid},
-                 {link.target_integration_id, mine.target_provider_event_id}
-               ])
+      set = CalendarSyncMirrorQueries.mirror_uids_for_integrations([link.target_integration_id])
+
+      assert MapSet.member?(set, {link.target_integration_id, mine.target_uid})
+      assert MapSet.member?(set, {link.target_integration_id, mine.target_provider_event_id})
+
+      # The exclusion is the point of the test, so it is asserted on the
+      # integration id rather than on the set's exact contents — which also
+      # carries the suffixed variants of every identifier.
+      refute Enum.any?(set, fn {integration_id, _uid} ->
+               integration_id == other_link.target_integration_id
+             end)
+
+      refute MapSet.member?(set, {link.target_integration_id, theirs.target_uid})
     end
 
     test "covers several integrations in one query", %{link: link} do
@@ -130,23 +168,23 @@ defmodule Tymeslot.Integrations.Calendar.CalendarSyncMirrorQueriesTest do
           other_link.target_integration_id
         ])
 
-      assert result ==
-               MapSet.new([
-                 {link.target_integration_id, mine.target_uid},
-                 {link.target_integration_id, mine.target_provider_event_id},
-                 {other_link.target_integration_id, theirs.target_uid},
-                 {other_link.target_integration_id, theirs.target_provider_event_id}
-               ])
+      assert MapSet.member?(result, {link.target_integration_id, mine.target_uid})
+      assert MapSet.member?(result, {link.target_integration_id, mine.target_provider_event_id})
+      assert MapSet.member?(result, {other_link.target_integration_id, theirs.target_uid})
+
+      assert MapSet.member?(
+               result,
+               {other_link.target_integration_id, theirs.target_provider_event_id}
+             )
     end
 
     test "includes a pending_delete mirror, which is still on the provider", %{link: link} do
       mirror = mirror_for_link(link, state: "pending_delete")
 
-      assert CalendarSyncMirrorQueries.mirror_uids_for_integrations([link.target_integration_id]) ==
-               MapSet.new([
-                 {link.target_integration_id, mirror.target_uid},
-                 {link.target_integration_id, mirror.target_provider_event_id}
-               ])
+      set = CalendarSyncMirrorQueries.mirror_uids_for_integrations([link.target_integration_id])
+
+      assert MapSet.member?(set, {link.target_integration_id, mirror.target_uid})
+      assert MapSet.member?(set, {link.target_integration_id, mirror.target_provider_event_id})
     end
   end
 

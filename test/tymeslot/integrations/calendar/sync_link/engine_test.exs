@@ -88,6 +88,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineTest do
       assert mirror.target_integration_id == target.id
       assert mirror.target_uid == Engine.target_uid_for(link.id, "source-uid-1")
       assert mirror.target_provider_event_id == "target-pid-1"
+      refute mirror.target_provider_event_id == mirror.target_uid
       assert mirror.state == "active"
       assert mirror.last_synced_at
     end
@@ -152,45 +153,8 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineTest do
       assert :ok == Engine.mirror(link, event, user.id)
     end
 
-    # Google reserves a deleted event's id: a placeholder that was withdrawn
-    # leaves a tombstone behind, and recreating it under the same deterministic
-    # id answers 409 "The requested identifier already exists" forever. Retries
-    # cannot help — the id is taken, and it is taken by *our own* previous
-    # placeholder.
-    #
-    # This is not a corner case. After withdrawing 1,544 stray placeholders on
-    # a live installation, every single rebuild collided with its own tombstone
-    # and the feature could not write anything at all.
-    #
-    # The recovery is to update the identifier that already exists, which is
-    # the same create→update fallback `Meetings.CalendarEventSync` already uses
-    # for the booking path.
-    test "a duplicate identifier is updated rather than retried forever", %{
-      user: user,
-      source: source,
-      target: target,
-      link: link
-    } do
-      expect(Tymeslot.CalendarMock, :create_event, fn _data, _context ->
-        {:error, :already_exists}
-      end)
-
-      # `update_event/3` answers a bare `:ok` — it discards the provider's
-      # response — so the mapping records the uid the placeholder was written
-      # under, which is the handle a later withdrawal uses.
-      expect(Tymeslot.CalendarMock, :update_event, fn _uid, _data, context ->
-        assert context == {target.id, user.id}
-        :ok
-      end)
-
-      assert :ok == Engine.mirror(link, source_event(source), user.id)
-
-      assert {:ok, mirror} =
-               CalendarSyncMirrorQueries.get_by_link_and_source_uid(link.id, "source-uid-1")
-
-      assert mirror.target_provider_event_id == Engine.target_uid_for(link.id, "source-uid-1")
-      assert mirror.state == "active"
-    end
+    # The 409 create→update fallback and the identifier it records live in
+    # `EngineAdoptionTest`.
 
     test "a provider failure surfaces as an error and writes no mapping", %{
       user: user,
