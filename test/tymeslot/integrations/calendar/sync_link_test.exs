@@ -9,6 +9,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLinkTest do
   is not only the `{:error, :not_found}` but that no row moved.
   """
   use Tymeslot.DataCase, async: true
+  use Oban.Testing, repo: Tymeslot.Repo
 
   @moduletag :calendar
   @moduletag :sync_links
@@ -22,6 +23,8 @@ defmodule Tymeslot.Integrations.Calendar.SyncLinkTest do
   alias Tymeslot.Integrations.Calendar.CalendarSyncMirrorSchema
   alias Tymeslot.Integrations.Calendar.SyncLink
   alias Tymeslot.Repo
+  alias Tymeslot.Workers.SyncLinkReconcileWorker
+  alias Tymeslot.Workers.SyncLinkWriteBackWorker
 
   setup :verify_on_exit!
 
@@ -504,6 +507,33 @@ defmodule Tymeslot.Integrations.Calendar.SyncLinkTest do
 
       assert [unchanged] = SyncLink.list_links(ctx.user.id)
       assert unchanged.enabled
+    end
+
+    # Pausing leaves the placeholders in place, which the docstring says. What
+    # *resuming* does is the half nothing stated, and it is worth stating: a
+    # resume enqueues nothing at all. No write-back, no reconcile, no provider
+    # call — the row's `enabled` flips and that is the whole operation.
+    #
+    # The catch-up is therefore entirely the reconcile sweep's, and it arrives
+    # on the sweep's own schedule rather than on the organiser's click. A source
+    # edited while the link was paused goes on showing its old placeholder until
+    # then; a source created while it was paused has no placeholder at all until
+    # then. That is the accepted design — a resume is not a request to write
+    # anything *now* — but it is a delay the organiser is given no sign of, so it
+    # is pinned here rather than left to be rediscovered.
+    test "resuming a link enqueues nothing and reaches for no provider", ctx do
+      {:ok, link} = SyncLink.create_link(ctx.user.id, attrs(ctx))
+      mirror_for_link(link, source_uid: "src-1", target_uid: "mirror-uid-1")
+
+      {:ok, _paused} = SyncLink.toggle_enabled(ctx.user.id, link.id, false)
+
+      # No Mox expectation of any kind: `verify_on_exit!` fails this test if the
+      # resume so much as reaches for the target calendar.
+      assert {:ok, resumed} = SyncLink.toggle_enabled(ctx.user.id, link.id, true)
+      assert resumed.enabled
+
+      refute_enqueued(worker: SyncLinkWriteBackWorker)
+      refute_enqueued(worker: SyncLinkReconcileWorker)
     end
   end
 
