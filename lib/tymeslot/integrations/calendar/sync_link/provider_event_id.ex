@@ -21,6 +21,15 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.ProviderEventId do
   while claiming to be active — and a placeholder with no recorded id cannot be
   deleted by any path.
 
+  ## The two success shapes
+
+  `update_event/3` answers a bare `:ok` from the CalDAV family, which keeps the
+  uid it was handed, and `{:ok, event}` from the OAuth families, which pipe the
+  response through their `convert_event/1`. Both mean the write landed, and
+  `for_update/2` below is what turns either into the id to record — the bare
+  `:ok` carrying no id of its own, so the uid the write was addressed to is the
+  answer.
+
   ## Why an update needs its own entry point
 
   `for_update/2` exists because the two provider families disagree about what an

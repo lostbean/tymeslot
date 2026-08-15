@@ -46,6 +46,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink do
   alias Tymeslot.Integrations.Calendar.CalendarIntegrationQueries
   alias Tymeslot.Integrations.Calendar.CalendarSyncLinkQueries
   alias Tymeslot.Integrations.Calendar.CalendarSyncLinkSchema
+  alias Tymeslot.Integrations.Calendar.SyncLink.Remirror
   alias Tymeslot.Integrations.Calendar.SyncLink.TargetMove
   alias Tymeslot.Integrations.Calendar.SyncLink.Teardown
 
@@ -187,7 +188,21 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink do
   forcing `true` keeps a deliberately paused link paused.
 
   The refill therefore arrives on the next sweep rather than immediately. No
-  job is enqueued here.
+  job is enqueued for a move.
+
+  ## Why an edit can rewrite placeholders instead
+
+  The edits that are not moves divide again. A tier, a label or a colour leaves
+  every placeholder where it is and changes what it *says*, and nothing else in
+  the system notices: the push path fires on a source event changing, and the
+  reconcile sweep compares the source's timestamp against the mapping's, so a
+  link switched to `generic_label` kept saying "Busy" until somebody happened
+  to edit the source. `SyncLink.Remirror` decides which edits those are and
+  enqueues an `:upsert` per mapping, each rebuilding its payload from the link
+  as saved.
+
+  Only one of the two ever runs. A save that both re-points and re-labels tears
+  the mappings down, which leaves nothing to rewrite — see `apply_edit/3`.
   """
   @spec update_link(integer(), integer() | any(), map()) :: result() | {:error, term()}
   def update_link(user_id, link_id, attrs) when is_integer(user_id) do
@@ -262,6 +277,12 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink do
   defp apply_edit(%Ecto.Changeset{valid?: false} = changeset, _link, _user_id),
     do: {:error, changeset}
 
+  # The two classes of edit are exclusive, and the re-point wins when one save
+  # is both. Teardown drops every mapping row, so a re-mirror afterwards would
+  # have nothing to iterate — and if it did, each job would name a mapping that
+  # no longer exists. The sweep refills the new target from scratch, under the
+  # presentation this same save stored, so the placeholders arrive saying the
+  # new thing without a second mechanism aiming at rows that are gone.
   defp apply_edit(changeset, link, user_id) do
     if TargetMove.repoint?(link, changeset) do
       with :ok <- Teardown.tear_down_link(link, user_id) do
@@ -270,9 +291,23 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink do
         |> CalendarSyncLinkQueries.update_changeset()
       end
     else
-      CalendarSyncLinkQueries.update_changeset(changeset)
+      changeset
+      |> CalendarSyncLinkQueries.update_changeset()
+      |> remirror_when_presentation_changed(link, changeset)
     end
   end
+
+  # After the write, never before. The rewrite is for placeholders that
+  # disagree with a link as *stored*, so an edit the database refused has
+  # nothing to answer for, and the saved struct is what decides whether a
+  # paused link is asked to write.
+  defp remirror_when_presentation_changed({:ok, saved}, link, changeset) do
+    if Remirror.presentation_change?(link, changeset), do: Remirror.enqueue_remirror(saved)
+
+    {:ok, saved}
+  end
+
+  defp remirror_when_presentation_changed(outcome, _link, _changeset), do: outcome
 
   # Teardown paused the link in the database; the changeset was built from the
   # struct as it was before that and so carries no `enabled` change at all,

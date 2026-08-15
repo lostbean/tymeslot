@@ -21,6 +21,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineTest do
 
   alias Tymeslot.Integrations.Calendar.CalendarEvent
   alias Tymeslot.Integrations.Calendar.CalendarSyncMirrorQueries
+  alias Tymeslot.Integrations.Calendar.Google.EventMapper
   alias Tymeslot.Integrations.Calendar.SyncLink.Engine
 
   setup :verify_on_exit!
@@ -251,6 +252,52 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.EngineTest do
       assert {:ok, mirror} =
                CalendarSyncMirrorQueries.get_by_link_and_source_uid(link.id, "source-uid-1")
 
+      assert mirror.state == "active"
+    end
+
+    # The test above returns the CalDAV shape, and every other test of this path
+    # did too, which is how an OAuth rewrite came to crash on a `case` that
+    # matched only `:ok`. `update_event/3` is declared `:ok | {:ok, any()} |
+    # {:error, any()}` and the OAuth families pipe their response through
+    # `convert_event/1`, landing the id under `uid` — so this is the shape a
+    # Google target really answers with, and it is the shape every placeholder
+    # rewritten by a presentation change on a Google link meets.
+    #
+    # This pins `update_mirror/7` specifically. The engine has *two* clauses
+    # accepting both success shapes, a dozen lines apart in reading order and
+    # nearly identical: this one, on the ordinary update, and the one in
+    # `adopt_existing_placeholder/6` on the 409 create→update fallback. Only the
+    # second is covered by `engine_adoption_test.exs`, so narrowing that one
+    # leaves this whole file green — which is exactly how the crash survived
+    # here in the first place. When checking whether this test bites, mutate the
+    # guard inside `update_mirror/7`, not the first one the file offers.
+    test "records the id an OAuth provider filed the rewrite under", %{
+      user: user,
+      source: source,
+      link: link
+    } do
+      target_uid = Engine.target_uid_for(link.id, "source-uid-1")
+      google_id = EventMapper.uuid_to_google_event_id(target_uid)
+
+      mirror_for_link(link,
+        source_uid: "source-uid-1",
+        target_uid: target_uid,
+        target_provider_event_id: "stale-pid"
+      )
+
+      expect(Tymeslot.CalendarMock, :update_event, fn _uid, _data, _context ->
+        {:ok, %{uid: google_id}}
+      end)
+
+      assert :ok == Engine.mirror(link, source_event(source), user.id)
+
+      assert {:ok, mirror} =
+               CalendarSyncMirrorQueries.get_by_link_and_source_uid(link.id, "source-uid-1")
+
+      # The id is the only handle teardown and loop prevention have on the
+      # placeholder. Keeping the one the row happened to carry leaves them
+      # addressing an event the provider does not hold under that name.
+      assert mirror.target_provider_event_id == google_id
       assert mirror.state == "active"
     end
 
