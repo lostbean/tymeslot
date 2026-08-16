@@ -46,13 +46,20 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.MirrorRow do
   both are destructive and both leave the row in `pending_delete` for the sweep
   when they cannot finish.
 
-  ## The etag baseline
+  ## The etag baseline used to live here
 
-  `baseline_after_write/0` lives here rather than in `ConflictLog` because it
-  decides the value of one column on one row write, which is this module's
-  subject, not the classification of a divergence, which is that one's. It is
-  `nil`, and the reasoning for that is long enough to be worth stating where
-  the column is set — see the function.
+  A `baseline_after_write/0` once sat in this module and answered a constant
+  `nil`, because at the time the placeholder's post-write etag existed nowhere
+  the engine could reach: the write response carried it and was discarded before
+  the engine saw it. Reading it back from the cache instead would have recorded
+  the *pre*-write value and reported the engine's own write as a stranger's
+  edit, so `nil` — "no baseline" — was the honest answer, at the cost of the
+  three etag-based conflict kinds never firing.
+
+  The write response now carries it (`SyncLink.WriteEtag`), so the engine stamps
+  the real value and the placeholder is gone rather than left as a function that
+  no longer decides anything. Nothing about *this* module's rule changed: the
+  column is still set on a row write that may not fail the provider write.
   """
 
   require Logger
@@ -115,34 +122,4 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.MirrorRow do
     mark(mirror, %{state: "pending_delete"})
     {:error, reason}
   end
-
-  @doc """
-  The etag to stamp on a row for a placeholder just written.
-
-  Cleared, not read back from the cache, and the difference is a bug's worth.
-
-  The baseline exists to answer "has anybody touched the placeholder since we
-  wrote it?", so it has to describe the placeholder *as written*. The only copy
-  of the new etag lives on the provider: our cache still holds whatever the
-  target's last inbound sync fetched, which is the state from *before* this
-  write. Storing that reads the engine's own change back as a stranger's the
-  moment the target syncs — the placeholder's `provider_updated_at` is when the
-  provider applied our write, necessarily later than the baseline we stamped,
-  so the `changed_after_write?` guard sees a later change and lets it through
-  as a hand edit.
-
-  `nil` says "no baseline" and `ConflictLog`'s `mirror_edited?/2` requires two
-  etags to compare, so an edit is simply not reported until the next write
-  establishes a real baseline from a re-synced cache. Under-reporting for one
-  cycle is the right trade against a spurious row per write per series: a
-  conflict log is read when someone is trying to find out why a calendar looks
-  wrong, and it is worth nothing if most of what it holds is the engine
-  reporting itself.
-
-  Fetching the written etag from the provider would be exact and costs a
-  request per mirror write; that is the trade to revisit if under-reporting
-  turns out to matter.
-  """
-  @spec baseline_after_write() :: nil
-  def baseline_after_write, do: nil
 end

@@ -121,6 +121,7 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
   alias Tymeslot.Integrations.Calendar.SyncLink.MirrorRow
   alias Tymeslot.Integrations.Calendar.SyncLink.ProviderEventId
   alias Tymeslot.Integrations.Calendar.SyncLink.RecurringSeries
+  alias Tymeslot.Integrations.Calendar.SyncLink.WriteEtag
 
   @uid_prefix "tymeslot-mirror-"
 
@@ -310,8 +311,20 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
       updated when wrote?(updated) ->
         provider_id = ProviderEventId.for_update(updated, target_uid)
 
+        # The id is resolved here because `for_update/2` has to see the bare
+        # `:ok` case, but the response itself travels on: it is the only carrier
+        # of the etag this write produced, and collapsing it to `%{uid: id}`
+        # here is what would drop the baseline on the 409 create→update
+        # fallback alone — a path that is exercised on every rebuild after a
+        # bulk withdrawal, so the gap would have looked intermittent.
         result =
-          persist_or_compensate(link, source_event, target_uid, %{uid: provider_id}, user_id)
+          persist_or_compensate(
+            link,
+            source_event,
+            target_uid,
+            %{provider_event_id: provider_id, etag: WriteEtag.extract(updated)},
+            user_id
+          )
 
         paint(result, link, target_uid, provider_id, user_id)
 
@@ -335,7 +348,10 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
       target_calendar_id: link.target_calendar_id,
       target_uid: target_uid,
       target_provider_event_id: provider_event_id(created),
-      target_etag: MirrorRow.baseline_after_write(),
+      # The placeholder as this write left it, read from the write's own
+      # response. `nil` for a provider that reports none, which switches the
+      # etag-based conflict kinds off for it rather than inventing a baseline.
+      target_etag: WriteEtag.extract(created),
       source_updated_at: Map.get(source_event, :provider_updated_at),
       source_etag: Map.get(source_event, :etag),
       last_synced_at: DateTime.utc_now(),
@@ -438,10 +454,15 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
         # was addressed to, so a CalDAV `:ok` keeps what it always kept.
         provider_id = ProviderEventId.for_update(updated, target_uid)
 
+        # The new baseline is this write's own etag, replacing the one the
+        # divergence above was just read against. A write that reports none
+        # clears it rather than leaving the previous one standing: a stale
+        # baseline describes a placeholder two writes ago, so comparing against
+        # it would report an edit nobody made.
         MirrorRow.mark(mirror, %{
           state: "active",
           last_synced_at: DateTime.utc_now(),
-          target_etag: MirrorRow.baseline_after_write(),
+          target_etag: WriteEtag.extract(updated),
           target_provider_event_id: provider_id,
           source_updated_at: Map.get(source_event, :provider_updated_at),
           source_etag: Map.get(source_event, :etag)
@@ -482,9 +503,14 @@ defmodule Tymeslot.Integrations.Calendar.SyncLink.Engine do
 
     case CalendarEvents.create_event(payload, {link.target_integration_id, user_id}) do
       {:ok, created} ->
+        # Re-baselined like any other write. The row survives a recreate, so
+        # without this it would keep the etag of the placeholder the organiser
+        # deleted — a baseline for an event that no longer exists, which the
+        # next pass would compare against the replacement and read as an edit.
         MirrorRow.mark(mirror, %{
           state: "active",
           last_synced_at: DateTime.utc_now(),
+          target_etag: WriteEtag.extract(created),
           target_provider_event_id: provider_event_id(created),
           source_updated_at: Map.get(source_event, :provider_updated_at),
           source_etag: Map.get(source_event, :etag)
