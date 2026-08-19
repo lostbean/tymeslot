@@ -1,0 +1,82 @@
+# Fly.io configuration.
+#
+# `fly launch` would generate most of this, but three choices here are
+# deliberate and a regenerated file would quietly undo them: the machine never
+# auto-stops, there is exactly one of it, and /app/data is a volume. Each is
+# explained where it appears.
+#
+# Rename `app` to whatever you registered with `fly apps create`.
+
+app = "tymeslot"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile.fly"
+
+[env]
+  PHX_SERVER = "true"
+  PORT = "8080"
+  DEPLOYMENT_TYPE = "docker"
+  TYMESLOT_EMBEDDED_DB = "false"
+
+  # Neon's pooler caps connections well below what a Postgres you own would
+  # allow, and the app's own default is 60 — sized for a self-hosted database.
+  # Ten is comfortable for a single machine and leaves headroom for the
+  # `fly ssh console` session you will want during an incident.
+  DATABASE_POOL_SIZE = "10"
+
+  # Set this to the hostname the app is actually served on. It is not
+  # cosmetic: booking links, OAuth redirect URIs and every URL in an email are
+  # generated from it, so a wrong value sends attendees somewhere else.
+  PHX_HOST = "tymeslot.fly.dev"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # The machine stays up. Fly's default is to stop an idle machine and wake it
+  # on the next request, which is a good default for a web app and the wrong
+  # one here: Oban's cron is what runs the calendar sync every fifteen minutes
+  # and the mirror reconcile sweep every thirty. A stopped machine runs neither,
+  # so an overnight gap in traffic becomes an overnight gap in synchronisation —
+  # and the first symptom is a double booking, not a slow page.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 200
+    soft_limit = 150
+
+  # Migrations run in the entrypoint before the server binds, so a machine that
+  # answers here has a schema the release agrees with. Fly keeps the previous
+  # version serving until this passes, which is what makes a failed migration a
+  # failed deploy rather than an outage.
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "15s"
+    method = "GET"
+    timeout = "5s"
+    path = "/healthcheck"
+
+[[vm]]
+  # 1GB is the floor for comfort rather than the floor for booting: asset
+  # compilation happens at build time, but the BEAM plus Oban's queues plus
+  # ffmpeg for an uploaded video will exceed 512MB under any real use.
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+# Avatars and theme backgrounds are written to disk and served over HTTP —
+# `config/prod.exs` pins `:upload_directory` to /app/data/uploads. They are not
+# in Postgres, so without this they vanish on every deploy.
+#
+# A Fly volume belongs to exactly one machine and cannot be shared, which is the
+# real reason `min_machines_running` is 1 rather than a cost decision. Scaling
+# out means moving uploads to object storage (Tigris is Fly-native) first.
+[[mounts]]
+  source = "tymeslot_data"
+  destination = "/app/data"
+  initial_size = "3gb"

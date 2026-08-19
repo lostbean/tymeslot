@@ -1,0 +1,127 @@
+# Fly.io image.
+#
+# Diverges from `Dockerfile.docker` in exactly one way that matters: nothing
+# here runs Postgres. Fly machines are cattle and the database lives at Neon, so
+# the embedded-Postgres branch of `start-docker.sh` — the bulk of that script —
+# has nothing to do and is replaced by a much smaller entrypoint.
+#
+# Everything else is deliberately identical, including the pinned base images.
+# The floating `elixir:1.20.1` tag tracks whichever OTP it was last rebuilt
+# against, which is how a previous image silently moved a major release ahead of
+# the rest of the project; and the Debian release is pinned to trixie in both
+# stages so the bundled ERTS links against the OpenSSL and ncurses it will
+# actually find at runtime.
+FROM hexpm/elixir:1.20.3-erlang-28.5.0.5-debian-trixie-20260803-slim AS build
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBCONF_NONINTERACTIVE_SEEN=true
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections && \
+    apt-get update && apt-get install -y \
+    git \
+    curl \
+    build-essential \
+    autoconf \
+    m4 \
+    libncurses5-dev \
+    libssl-dev \
+    nodejs \
+    npm \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# `DEPLOYMENT_TYPE=docker` on purpose, not a placeholder for a "fly" type.
+# `Infrastructure.DatabaseConfig.build/2` branches on this value, and its
+# "docker" clause is the one that reads `DATABASE_URL` and honours the `sslmode`
+# a provider-issued URL carries — exactly what a Neon connection string needs.
+# Adding a "fly" branch would mean duplicating that logic to reach the same
+# place.
+ENV MIX_ENV=prod \
+    NODE_ENV=production \
+    DEPLOYMENT_TYPE=docker
+
+COPY mix.exs mix.lock ./
+COPY config ./config
+
+RUN mix deps.get --only prod
+
+# Wipe locally-built assets first so the image is hermetic: assets are always
+# produced by `mix assets.deploy` below, never carried in from a developer's
+# priv/static/assets/.
+COPY . .
+RUN rm -rf priv/static/assets/
+
+RUN mix do deps.compile + compile
+
+RUN for i in 1 2 3 4 5; do \
+        echo "Attempt $i: installing tailwind and esbuild" && \
+        mix do tailwind.install + esbuild.install && break || sleep 5; \
+    done
+
+# The standalone tailwind binary bundles @tailwindcss/forms but not the
+# tailwindcss runtime that assets/heroicons.js reaches for via
+# require("tailwindcss/plugin"), so it resolves that from assets/node_modules.
+RUN npm ci --prefix assets
+
+RUN mix assets.deploy
+
+# `mix release` embeds config/runtime.exs in the release, so the runtime stage
+# needs no copy of config/.
+RUN mix release tymeslot
+
+FROM debian:trixie-slim AS app
+
+# `postgresql-client` is kept even though Fly runs no database: it is what makes
+# `fly ssh console` useful for inspecting Neon during an incident. ffmpeg is
+# required by the media-processing queue for uploaded video variants.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    libssl3 \
+    libncurses6 \
+    ca-certificates \
+    locales \
+    tzdata \
+    ffmpeg \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN locale-gen C.UTF-8 && update-locale LANG=C.UTF-8 LC_ALL=C.UTF-8
+RUN ln -fs /usr/share/zoneinfo/UTC /etc/localtime && \
+    dpkg-reconfigure -f noninteractive tzdata
+
+RUN useradd --create-home --shell /bin/bash app && \
+    mkdir -p /app /app/data /app/data/uploads && \
+    chown -R app:app /app
+
+WORKDIR /app
+
+COPY --from=build --chown=app:app /app/_build/prod/rel/tymeslot ./
+COPY --chown=app:app fly-entrypoint.sh /app/fly-entrypoint.sh
+RUN chmod +x /app/fly-entrypoint.sh
+
+# `TYMESLOT_EMBEDDED_DB=false` is what tells the app its database is external.
+# `ECTO_IPV6` is set because Fly's private network is IPv6-only; Neon is reached
+# over the public internet so it does not need it, but any future Fly-internal
+# Postgres would.
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    MIX_ENV=prod \
+    DEPLOYMENT_TYPE=docker \
+    PHX_SERVER=true \
+    PORT=8080 \
+    TYMESLOT_EMBEDDED_DB=false
+
+EXPOSE 8080
+
+# Uploads — avatars and theme backgrounds — are written here and served over
+# HTTP by the endpoint (`config/prod.exs` pins `:upload_directory` to
+# /app/data/uploads). A Fly volume mounts over this path, which is why the app
+# runs on a single machine: a volume belongs to one machine and cannot be
+# shared, so a second machine would serve 404s for half the avatars.
+VOLUME ["/app/data"]
+
+ENTRYPOINT ["/app/fly-entrypoint.sh"]
