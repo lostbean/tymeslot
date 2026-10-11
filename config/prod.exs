@@ -15,8 +15,8 @@ config :tymeslot, TymeslotWeb.Endpoint,
 # Upload directory
 config :tymeslot, :upload_directory, "/app/data/uploads"
 
-# Enable secure cookies in production
-config :tymeslot, :secure_cookies, true
+# Enable secure cookies in production (disabled to support plain HTTP local hosting)
+config :tymeslot, :secure_cookies, false
 
 # Configures Swoosh API Client
 config :swoosh, api_client: Swoosh.ApiClient.Finch, finch_name: Tymeslot.Finch

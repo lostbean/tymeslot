@@ -52,10 +52,7 @@ defmodule TymeslotWeb.Plugs.SecurityHeadersPlug do
       |> put_resp_header("x-content-type-options", "nosniff")
       |> put_resp_header("referrer-policy", "strict-origin-when-cross-origin")
       |> put_resp_header("permissions-policy", permissions_policy())
-      |> put_resp_header(
-        "strict-transport-security",
-        "max-age=31536000; includeSubDomains; preload"
-      )
+      |> maybe_put_hsts()
 
     cond do
       allow_embedding == :any ->
@@ -283,5 +280,17 @@ defmodule TymeslotWeb.Plugs.SecurityHeadersPlug do
       ],
       ", "
     )
+  end
+
+  defp maybe_put_hsts(conn) do
+    if conn.scheme == :https or Plug.Conn.get_req_header(conn, "x-forwarded-proto") == ["https"] do
+      put_resp_header(
+        conn,
+        "strict-transport-security",
+        "max-age=31536000; includeSubDomains; preload"
+      )
+    else
+      conn
+    end
   end
 end
